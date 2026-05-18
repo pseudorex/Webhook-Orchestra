@@ -25,3 +25,4 @@ class Tenant(Base):
         DateTime(timezone=True),
         server_default=func.now()
     )
+    webhook_secret = Column(String, nullable=True)

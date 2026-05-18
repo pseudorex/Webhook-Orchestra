@@ -42,14 +42,7 @@ async def create_event(
 
     await db.refresh(new_event)
 
-    # PUSH TASK TO REDIS QUEUE
-    deliver_webhook.delay(
-        tenant.webhook_url,
-        {
-            "event_id": str(new_event.id),
-            "event_type": new_event.event_type,
-            "payload": new_event.payload
-        }
-    )
+    # PUSH EVENT ID TO REDIS QUEUE
+    deliver_webhook.delay(new_event.id)
 
     return new_event

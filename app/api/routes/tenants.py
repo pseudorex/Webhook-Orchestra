@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.schemas.tenant import (
     TenantCreate,
     TenantResponse
 )
-
+import secrets
 from app.models.tenant import Tenant
 from app.core.security import generate_api_key
 from app.api.dependencies.database import get_db
@@ -35,15 +36,17 @@ async def register_tenant(
     existing_tenant = existing_tenant.scalar_one_or_none()
 
     if existing_tenant:
-        return {
-            "message": "Tenant already exists"
-        }
+        raise HTTPException(
+            status_code=400,
+            detail="Tenant already exists"
+        )
 
     new_tenant = Tenant(
         name=tenant.name,
         email=tenant.email,
         api_key=generate_api_key(),
-        webhook_url=tenant.webhook_url
+        webhook_url=tenant.webhook_url,
+        webhook_secret=secrets.token_hex(32)
     )
 
     db.add(new_tenant)
