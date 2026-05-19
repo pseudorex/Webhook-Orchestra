@@ -30,3 +30,8 @@ class Event(Base):
         DateTime(timezone=True),
         server_default=func.now()
     )
+    idempotency_key = Column(
+        String,
+        unique=True,
+        nullable=True
+    )

@@ -70,7 +70,8 @@ def deliver_webhook(
 
             # NEW HEADERS
             headers={
-                "X-Webhook-Signature": signature
+                "X-Webhook-Signature": signature,
+                "X-Event-ID": str(event.id)
             },
 
             timeout=10
