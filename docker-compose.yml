@@ -22,9 +22,8 @@ services:
 
   worker:
     build: .
-    container_name: webhook_worker
 
-    command: celery -A worker.celery_app:celery worker --loglevel=info
+    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=4
 
     depends_on:
       - redis

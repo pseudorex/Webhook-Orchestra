@@ -35,3 +35,5 @@ class Event(Base):
         unique=True,
         nullable=True
     )
+    replay_count = Column(Integer, default=0)
+    last_replayed_at = Column(DateTime, nullable=True)
