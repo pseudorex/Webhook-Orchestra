@@ -6,7 +6,12 @@ from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# CONVERT ASYNC URL → SYNC URL
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "Ensure .env file exists or the variable is exported."
+    )
+
 SYNC_DATABASE_URL = DATABASE_URL.replace(
     "postgresql+asyncpg",
     "postgresql+psycopg2"

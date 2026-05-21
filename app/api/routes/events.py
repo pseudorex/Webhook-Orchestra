@@ -43,7 +43,8 @@ async def create_event(
 
         existing_event = await db.execute(
             select(Event).where(
-                Event.idempotency_key == event.idempotency_key
+                Event.idempotency_key == event.idempotency_key,
+                Event.tenant_id == tenant.id  # ← add tenant scope
             )
         )
 
@@ -82,7 +83,8 @@ async def create_event(
 async def dead_events(
     limit: int = 10,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant)    # ← add
 ):
 
     events = await get_dead_events(
@@ -97,19 +99,10 @@ async def dead_events(
 @router.get("/{event_id}")
 async def get_event(
     event_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant)    # ← add
 ):
-
-    event = await get_event_by_id(
-        db=db,
-        event_id=event_id
-    )
-
-    if not event:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Event not found"
-        )
-
+    event = await get_event_by_id(db=db, event_id=event_id)
+    if not event or event.tenant_id != tenant.id:   # ← verify ownership
+        raise HTTPException(status_code=404, detail="Event not found")
     return event

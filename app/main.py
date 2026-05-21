@@ -12,6 +12,10 @@ from app.api.routes.replay import (
     router as replay_router
 )
 
+from app.api.routes.dlq import (
+    router as dlq_router
+)
+
 app = FastAPI(
     title="Webhook Orchestra"
 )
@@ -20,6 +24,7 @@ app.include_router(tenant_router)
 app.include_router(event_router)
 app.include_router(webhook_router)
 app.include_router(replay_router)
+app.include_router(dlq_router)
 
 
 @app.get("/")
