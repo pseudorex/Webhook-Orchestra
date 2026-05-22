@@ -11,7 +11,7 @@ from app.models.tenant import Tenant
 from app.api.dependencies.database import get_db
 from app.api.dependencies.auth import get_current_tenant
 
-from worker.tasks import deliver_webhook
+from app.services.routing_engine import RoutingEngine
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,8 +72,11 @@ async def create_event(
 
     await db.refresh(new_event)
 
-    # PUSH EVENT TO QUEUE
-    deliver_webhook.delay(int(new_event.id))
+    # FAN-OUT TO ALL SUBSCRIPTIONS
+    await RoutingEngine.fan_out_event(
+        db=db,
+        event=new_event
+    )
 
     return new_event
 

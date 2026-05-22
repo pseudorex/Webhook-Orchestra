@@ -11,7 +11,9 @@ from app.services.reliability.webhook_engine import (
 @celery.task(bind=True)
 def deliver_webhook(
     self,
-    event_id
+    event_id,
+    endpoint_url=None,       # <-- Changed: Made optional (default to None)
+    subscription_id=None
 ):
 
     db = SessionLocal()
@@ -28,7 +30,9 @@ def deliver_webhook(
 
         WebhookEngine.process_event(
             db=db,
-            event=event
+            event=event,
+            endpoint_url=endpoint_url,
+            subscription_id=subscription_id
         )
 
     finally:

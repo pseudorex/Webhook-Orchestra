@@ -28,11 +28,15 @@ from app.services.reliability.dlq_service import (
     DLQService
 )
 
+from app.services.reliability.circuit_breaker_service import (
+    CircuitBreakerService
+)
+
 
 class WebhookEngine:
 
     @staticmethod
-    def process_event(db, event):
+    def process_event(db, event, endpoint_url=None, subscription_id=None):
 
         start = time.time()
 
@@ -53,11 +57,47 @@ class WebhookEngine:
                     "TENANT NOT FOUND"
                 )
 
-            if not tenant.webhook_url:
+            # -----------------------------
+            # RESOLVE TARGET URL
+            # -----------------------------
+
+            target_url = endpoint_url or tenant.webhook_url
+
+            if not target_url:
 
                 raise Exception(
-                    "WEBHOOK URL NOT CONFIGURED"
+                    "NO ENDPOINT URL AVAILABLE"
                 )
+
+            # =============================
+            # CIRCUIT BREAKER CHECK
+            # =============================
+
+            allowed = CircuitBreakerService.should_allow_request(
+                db=db,
+                endpoint_url=target_url,
+                tenant_id=event.tenant_id,
+            )
+
+            if not allowed:
+
+                print("=================================")
+                print(
+                    f"SKIPPED — CIRCUIT OPEN: "
+                    f"{target_url}"
+                )
+                print("=================================")
+
+                # Schedule a retry after cooldown
+                WebhookEngine.handle_circuit_open(
+                    db=db,
+                    event=event,
+                    endpoint_url=endpoint_url,
+                    subscription_id=subscription_id,
+                    target_url=target_url,
+                )
+
+                return
 
             # -----------------------------
             # BUILD PAYLOAD
@@ -83,7 +123,7 @@ class WebhookEngine:
             # -----------------------------
 
             response = requests.post(
-                tenant.webhook_url,
+                target_url,
                 json=payload,
                 headers={
                     "X-Webhook-Signature": signature,
@@ -142,11 +182,19 @@ class WebhookEngine:
 
                 event.next_retry_at = None
 
+                # CIRCUIT BREAKER — record success
+                CircuitBreakerService.record_success(
+                    db=db,
+                    endpoint_url=target_url,
+                    tenant_id=event.tenant_id,
+                )
+
                 db.commit()
 
                 print("=================================")
                 print("WEBHOOK DELIVERED")
                 print("STATUS:", response.status_code)
+                print("ENDPOINT:", target_url)
                 print("=================================")
 
                 return
@@ -159,11 +207,20 @@ class WebhookEngine:
                 status_code=response.status_code
             )
 
+            # CIRCUIT BREAKER — record failure
+            CircuitBreakerService.record_failure(
+                db=db,
+                endpoint_url=target_url,
+                tenant_id=event.tenant_id,
+            )
+
             WebhookEngine.handle_failure(
                 db=db,
                 event=event,
                 failure_type=failure_type,
-                error_message=response.text
+                error_message=response.text,
+                endpoint_url=endpoint_url,
+                subscription_id=subscription_id
             )
 
         except Exception as error:
@@ -192,6 +249,21 @@ class WebhookEngine:
                 failure_type=failure_type.value
             )
 
+            # CIRCUIT BREAKER — record failure
+            target_url = endpoint_url or getattr(
+                db.get(Tenant, event.tenant_id),
+                'webhook_url',
+                None
+            )
+
+            if target_url:
+
+                CircuitBreakerService.record_failure(
+                    db=db,
+                    endpoint_url=target_url,
+                    tenant_id=event.tenant_id,
+                )
+
             # -----------------------------
             # HANDLE FAILURE
             # -----------------------------
@@ -200,15 +272,65 @@ class WebhookEngine:
                 db=db,
                 event=event,
                 failure_type=failure_type,
-                error_message=str(error)
+                error_message=str(error),
+                endpoint_url=endpoint_url,
+                subscription_id=subscription_id
             )
+
+    # =========================================
+    # HANDLE CIRCUIT OPEN — SCHEDULE RETRY
+    # =========================================
+
+    @staticmethod
+    def handle_circuit_open(
+        db,
+        event,
+        endpoint_url,
+        subscription_id,
+        target_url
+    ):
+
+        circuit = CircuitBreakerService.get_or_create(
+            db=db,
+            endpoint_url=target_url,
+            tenant_id=event.tenant_id,
+        )
+
+        delay = circuit.cooldown_seconds
+
+        event.status = "circuit_open"
+        event.next_retry_at = (
+            datetime.utcnow()
+            + timedelta(seconds=delay)
+        )
+
+        db.commit()
+
+        print("=================================")
+        print(
+            f"RETRY AFTER COOLDOWN: {delay}s"
+        )
+        print("=================================")
+
+        from worker.tasks import deliver_webhook
+
+        deliver_webhook.apply_async(
+            args=[event.id, endpoint_url, subscription_id],
+            countdown=delay
+        )
+
+    # =========================================
+    # HANDLE FAILURE
+    # =========================================
 
     @staticmethod
     def handle_failure(
         db,
         event,
         failure_type,
-        error_message
+        error_message,
+        endpoint_url=None,
+        subscription_id=None
     ):
 
         # -----------------------------
@@ -297,10 +419,50 @@ class WebhookEngine:
         from worker.tasks import deliver_webhook
 
         # -----------------------------
+        # CHECK CIRCUIT BEFORE RETRY
+        # If circuit just opened, use
+        # cooldown instead of backoff
+        # -----------------------------
+
+        from app.services.reliability.circuit_breaker_service import (
+            CircuitBreakerService
+        )
+
+        target_url = endpoint_url
+        if not target_url:
+            tenant = db.get(Tenant, event.tenant_id)
+            target_url = tenant.webhook_url if tenant else None
+
+        if target_url:
+
+            circuit = CircuitBreakerService.get_or_create(
+                db=db,
+                endpoint_url=target_url,
+                tenant_id=event.tenant_id,
+            )
+
+            if circuit.state == "open":
+                delay = circuit.cooldown_seconds
+
+                event.status = "circuit_open"
+                event.next_retry_at = (
+                        datetime.utcnow()
+                        + timedelta(seconds=delay)
+                )
+                db.commit()
+
+                print("=================================")
+                print(
+                    f"CIRCUIT OPEN — USING COOLDOWN: "
+                    f"{delay}s"
+                )
+                print("=================================")
+
+        # -----------------------------
         # SCHEDULE RETRY
         # -----------------------------
 
         deliver_webhook.apply_async(
-            args=[event.id],
+            args=[event.id, endpoint_url, subscription_id],
             countdown=delay
         )
