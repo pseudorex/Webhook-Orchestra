@@ -3,6 +3,7 @@ from sqlalchemy import (
     Integer,
     String,
     DateTime,
+    Float,
 )
 
 from sqlalchemy.sql import func
@@ -89,4 +90,50 @@ class CircuitBreaker(Base):
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now()
+    )
+
+    # --------------------------
+    # HEALTH TRACKING METRICS (Phase 5.3)
+    # --------------------------
+
+    success_count = Column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    total_requests = Column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    success_rate = Column(
+        Float,
+        default=100.0,
+        nullable=False
+    )
+
+    average_latency_ms = Column(
+        Float,
+        default=0.0,
+        nullable=False
+    )
+
+    consecutive_failures = Column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    health_score = Column(
+        Float,
+        default=100.0,
+        nullable=False
+    )
+
+    health_state = Column(
+        String,
+        default="healthy",
+        nullable=False
     )

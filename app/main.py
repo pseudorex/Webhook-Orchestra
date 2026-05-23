@@ -20,6 +20,10 @@ from app.api.routes.subscription import (
     router as subscription_router
 )
 
+from app.api.routes.endpoints import (
+    router as endpoint_router
+)
+
 app = FastAPI(
     title="Webhook Orchestra"
 )
@@ -30,7 +34,7 @@ app.include_router(webhook_router)
 app.include_router(replay_router)
 app.include_router(dlq_router)
 app.include_router(subscription_router)
-
+app.include_router(endpoint_router)
 
 @app.get("/")
 def root():

@@ -187,6 +187,7 @@ class WebhookEngine:
                     db=db,
                     endpoint_url=target_url,
                     tenant_id=event.tenant_id,
+                    latency_ms=latency,
                 )
 
                 db.commit()
@@ -212,6 +213,7 @@ class WebhookEngine:
                 db=db,
                 endpoint_url=target_url,
                 tenant_id=event.tenant_id,
+                latency_ms=latency,
             )
 
             WebhookEngine.handle_failure(
@@ -262,6 +264,7 @@ class WebhookEngine:
                     db=db,
                     endpoint_url=target_url,
                     tenant_id=event.tenant_id,
+                    latency_ms=latency,
                 )
 
             # -----------------------------
