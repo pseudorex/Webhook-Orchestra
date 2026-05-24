@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models.event import Event
 
@@ -33,7 +33,7 @@ async def replay_event(
     # UPDATE REPLAY METADATA
     event.replay_count += 1
 
-    event.last_replayed_at = datetime.utcnow()
+    event.last_replayed_at = datetime.now(timezone.utc)
 
     # MOVE BACK TO RETRYING
     event.status = "retrying"
@@ -43,7 +43,8 @@ async def replay_event(
     # REQUEUE TASK
     celery.send_task(
         "worker.tasks.deliver_webhook",
-        args=[event.id]
+        args=[event.id],
+        queue="low_priority"
     )
 
     return {

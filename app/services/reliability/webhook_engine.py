@@ -3,7 +3,8 @@ import time
 
 from datetime import (
     datetime,
-    timedelta
+    timedelta,
+    timezone
 )
 
 from app.models.tenant import Tenant
@@ -172,7 +173,7 @@ class WebhookEngine:
 
                 event.status = "delivered"
 
-                event.delivered_at = datetime.utcnow()
+                event.delivered_at = datetime.now(timezone.utc)
 
                 event.last_error = None
 
@@ -303,8 +304,8 @@ class WebhookEngine:
 
         event.status = "circuit_open"
         event.next_retry_at = (
-            datetime.utcnow()
-            + timedelta(seconds=delay)
+                datetime.now(timezone.utc)
+                + timedelta(seconds=delay)
         )
 
         db.commit()
@@ -317,9 +318,13 @@ class WebhookEngine:
 
         from worker.tasks import deliver_webhook
 
+        # Determine target queue based on retry count
+        target_queue = "default" if event.retry_count <= 2 else "low_priority"
+
         deliver_webhook.apply_async(
             args=[event.id, endpoint_url, subscription_id],
-            countdown=delay
+            countdown=delay,
+            queue=target_queue
         )
 
     # =========================================
@@ -396,7 +401,7 @@ class WebhookEngine:
         )
 
         retry_time = (
-            datetime.utcnow()
+            datetime.now(timezone.utc)
             + timedelta(seconds=delay)
         )
 
@@ -449,7 +454,7 @@ class WebhookEngine:
 
                 event.status = "circuit_open"
                 event.next_retry_at = (
-                        datetime.utcnow()
+                        datetime.now(timezone.utc)
                         + timedelta(seconds=delay)
                 )
                 db.commit()
@@ -461,11 +466,15 @@ class WebhookEngine:
                 )
                 print("=================================")
 
+        # Determine target queue based on retry count
+        target_queue = "default" if event.retry_count <= 2 else "low_priority"
+
         # -----------------------------
         # SCHEDULE RETRY
         # -----------------------------
 
         deliver_webhook.apply_async(
             args=[event.id, endpoint_url, subscription_id],
-            countdown=delay
+            countdown=delay,
+            queue=target_queue
         )

@@ -73,6 +73,9 @@ async def replay_dead_event(                        # ← add async
 
     await db.commit()                               # ← single await commit
 
-    deliver_webhook.delay(event.id)                 # ← ACTUALLY ENQUEUE THE TASK
+    deliver_webhook.apply_async(
+        args=[event.id],
+        queue="low_priority"
+    )
 
     return {"message": "Replay scheduled"}

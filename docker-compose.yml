@@ -1,4 +1,3 @@
-
 services:
 
   backend:
@@ -19,17 +18,25 @@ services:
 
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  worker:
+  worker-high:
     build: .
-
-    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=4
-
+    container_name: webhook_worker_high
+    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=4 -Q high_priority
     depends_on:
       - redis
-
     env_file:
       - .env
+    volumes:
+      - .:/app
 
+  worker-retry:
+    build: .
+    container_name: webhook_worker_retry
+    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=2 -Q default,low_priority
+    depends_on:
+      - redis
+    env_file:
+      - .env
     volumes:
       - .:/app
 

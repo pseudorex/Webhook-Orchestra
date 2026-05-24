@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.models.circuit_breaker import CircuitBreaker
 
@@ -64,7 +64,7 @@ class CircuitBreakerService:
                 return False
 
             elapsed = (
-                    datetime.utcnow() - circuit.opened_at
+                    datetime.now(timezone.utc) - circuit.opened_at
             )
 
             cooldown = timedelta(
@@ -172,7 +172,7 @@ class CircuitBreakerService:
         circuit.state = "closed"
         circuit.failure_count = 0
         circuit.consecutive_failures = 0
-        circuit.last_success_at = datetime.utcnow()
+        circuit.last_success_at = datetime.now(timezone.utc)
         circuit.opened_at = None
 
         circuit.total_requests += 1
@@ -218,7 +218,7 @@ class CircuitBreakerService:
 
         circuit.failure_count += 1
         circuit.consecutive_failures += 1
-        circuit.last_failure_at = datetime.utcnow()
+        circuit.last_failure_at = datetime.now(timezone.utc)
 
         circuit.total_requests += 1
         circuit.success_rate = (circuit.success_count / circuit.total_requests) * 100.0
@@ -235,7 +235,7 @@ class CircuitBreakerService:
         # HALF_OPEN failure → re-open
         if circuit.state == "half_open":
             circuit.state = "open"
-            circuit.opened_at = datetime.utcnow()
+            circuit.opened_at = datetime.now(timezone.utc)
 
             CircuitBreakerService.calculate_health(circuit)
             db.commit()
@@ -249,7 +249,7 @@ class CircuitBreakerService:
         # CLOSED → check threshold
         if circuit.failure_count >= circuit.failure_threshold:
             circuit.state = "open"
-            circuit.opened_at = datetime.utcnow()
+            circuit.opened_at = datetime.now(timezone.utc)
 
             CircuitBreakerService.calculate_health(circuit)
             db.commit()
