@@ -1,10 +1,12 @@
 import os
 import redis
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.subscription_service import SubscriptionCRUD
 from worker.tasks import deliver_webhook
 
+logger = logging.getLogger(__name__)
 
 # Initialize Redis Client to query queue lengths
 try:
@@ -27,10 +29,13 @@ def get_adaptive_queue(base_queue: str) -> str:
         try:
             high_len = redis_client.llen("high_priority")
             if high_len > 10:  # Threshold of 10 for easier testing
-                print(f"[Adaptive Routing] HIGH PRIORITY CONGESTED ({high_len} tasks). Routing to default.")
+                logger.warning(
+                    f"HIGH PRIORITY CONGESTED ({high_len} tasks). Routing to default.",
+                    extra={"queue": "high_priority"}
+                )
                 return "default"
         except Exception as e:
-            print(f"[Adaptive Routing] Error reading Redis queue length: {e}")
+            logger.error(f"Error reading Redis queue length: {e}", exc_info=True)
     return base_queue
 
 
@@ -51,19 +56,13 @@ class RoutingEngine:
         )
 
         if not subscriptions:
-
-            print(
-                f"No subscriptions found for topic: "
-                f"{event.event_type}"
-            )
-
+            logger.info(f"No subscriptions found for topic: {event.event_type}")
             return
 
         for subscription in subscriptions:
-
-            print(
-                f"Dispatching event {event.id} "
-                f"to {subscription.endpoint_url}"
+            logger.info(
+                f"Dispatching event to {subscription.endpoint_url}",
+                extra={"subscription_id": subscription.id}
             )
 
             # Determine the queue dynamically

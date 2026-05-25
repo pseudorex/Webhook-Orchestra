@@ -1,5 +1,7 @@
 from celery import Celery
 from kombu import Queue
+# Importing this file registers Celery signals (setup_logging, prerun, postrun, before_task_publish)
+import app.core.logging
 
 celery = Celery(
     "webhook_tasks",

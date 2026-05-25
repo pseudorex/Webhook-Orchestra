@@ -20,6 +20,7 @@ from app.services.event_service import (
     get_dead_events,
     get_event_by_id
 )
+from app.core.logging import event_id_var
 
 
 router = APIRouter(
@@ -44,7 +45,7 @@ async def create_event(
         existing_event = await db.execute(
             select(Event).where(
                 Event.idempotency_key == event.idempotency_key,
-                Event.tenant_id == tenant.id  # ← add tenant scope
+                Event.tenant_id == tenant.id
             )
         )
 
@@ -52,7 +53,8 @@ async def create_event(
 
         # RETURN EXISTING EVENT
         if existing_event:
-
+            # Set context variable for existing event before exiting
+            event_id_var.set(existing_event.id)
             return existing_event
 
     # CREATE NEW EVENT
@@ -61,16 +63,15 @@ async def create_event(
         event_type=event.event_type,
         payload=event.payload,
         status="received",
-
-        # NEW FIELD
         idempotency_key=event.idempotency_key
     )
 
     db.add(new_event)
-
     await db.commit()
-
     await db.refresh(new_event)
+
+    # Set context variable for the new event
+    event_id_var.set(new_event.id)
 
     # FAN-OUT TO ALL SUBSCRIPTIONS
     await RoutingEngine.fan_out_event(
@@ -81,21 +82,18 @@ async def create_event(
     return new_event
 
 
-
 @router.get("/dead")
 async def dead_events(
     limit: int = 10,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    tenant: Tenant = Depends(get_current_tenant)    # ← add
+    tenant: Tenant = Depends(get_current_tenant)
 ):
-
     events = await get_dead_events(
         db=db,
         limit=limit,
         offset=offset
     )
-
     return events
 
 
@@ -103,9 +101,11 @@ async def dead_events(
 async def get_event(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    tenant: Tenant = Depends(get_current_tenant)    # ← add
+    tenant: Tenant = Depends(get_current_tenant)
 ):
     event = await get_event_by_id(db=db, event_id=event_id)
-    if not event or event.tenant_id != tenant.id:   # ← verify ownership
+    if not event or event.tenant_id != tenant.id:
         raise HTTPException(status_code=404, detail="Event not found")
+    # Set context variables when retrieving event details
+    event_id_var.set(event.id)
     return event

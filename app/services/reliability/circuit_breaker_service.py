@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import logging
 
 from app.models.circuit_breaker import CircuitBreaker
+
+logger = logging.getLogger(__name__)
 
 
 class CircuitBreakerService:
@@ -76,26 +79,18 @@ class CircuitBreakerService:
                 circuit.state = "half_open"
                 db.commit()
 
-                print("=================================")
-                print(
-                    f"CIRCUIT HALF-OPEN: "
-                    f"{endpoint_url}"
+                logger.info(
+                    f"Circuit state changed to HALF-OPEN for {endpoint_url}",
+                    extra={"endpoint_url": endpoint_url}
                 )
-                print("=================================")
 
                 return True
 
             # Still in cooldown → block
-            print("=================================")
-            print(
-                f"CIRCUIT OPEN — BLOCKING: "
-                f"{endpoint_url}"
+            logger.warning(
+                f"Circuit is OPEN. Blocking request to {endpoint_url}. Cooldown remaining: {cooldown - elapsed}",
+                extra={"endpoint_url": endpoint_url, "cooldown_seconds": circuit.cooldown_seconds}
             )
-            print(
-                f"RETRY AFTER: "
-                f"{cooldown - elapsed}"
-            )
-            print("=================================")
 
             return False
 
@@ -114,13 +109,6 @@ class CircuitBreakerService:
 
     @staticmethod
     def calculate_health(circuit):
-        """
-        Calculates the health score (0.0 to 100.0) and transitions the health state:
-        - Consecutive failures: Deducts 20 points per failure.
-        - Latency penalty: Deducts points if average latency > 200ms.
-        - Success rate penalty: Deducts points based on drop in success rate.
-        - Open Circuit: Forces score to 0.0.
-        """
         if circuit.state == "open":
             circuit.health_score = 0.0
             circuit.health_state = "unhealthy"
@@ -183,7 +171,6 @@ class CircuitBreakerService:
             if circuit.total_requests == 1:
                 circuit.average_latency_ms = float(latency_ms)
             else:
-                # Cumulative moving average
                 circuit.average_latency_ms = (
                                                      (circuit.average_latency_ms * (
                                                                  circuit.total_requests - 1)) + latency_ms
@@ -195,10 +182,10 @@ class CircuitBreakerService:
         db.commit()
 
         if previous_state != "closed":
-            print("=================================")
-            print(f"CIRCUIT CLOSED: {endpoint_url}")
-            print(f"PREVIOUS STATE: {previous_state}")
-            print("=================================")
+            logger.info(
+                f"Circuit state changed to CLOSED for {endpoint_url}",
+                extra={"endpoint_url": endpoint_url, "previous_state": previous_state}
+            )
 
     # ================================
     # RECORD FAILURE
@@ -240,10 +227,10 @@ class CircuitBreakerService:
             CircuitBreakerService.calculate_health(circuit)
             db.commit()
 
-            print("=================================")
-            print(f"CIRCUIT RE-OPENED: {endpoint_url}")
-            print("HALF-OPEN TEST FAILED")
-            print("=================================")
+            logger.warning(
+                f"Circuit state changed to OPEN (half-open test failed) for {endpoint_url}",
+                extra={"endpoint_url": endpoint_url}
+            )
             return
 
         # CLOSED → check threshold
@@ -254,18 +241,26 @@ class CircuitBreakerService:
             CircuitBreakerService.calculate_health(circuit)
             db.commit()
 
-            print("=================================")
-            print(f"CIRCUIT OPENED: {endpoint_url}")
-            print(f"FAILURES: {circuit.failure_count}/{circuit.failure_threshold}")
-            print(f"COOLDOWN: {circuit.cooldown_seconds}s")
-            print("=================================")
+            logger.warning(
+                f"Circuit state changed to OPEN for {endpoint_url}",
+                extra={
+                    "endpoint_url": endpoint_url,
+                    "failures": circuit.failure_count,
+                    "threshold": circuit.failure_threshold,
+                    "cooldown_seconds": circuit.cooldown_seconds
+                }
+            )
             return
 
         # Recalculate health for transient failures before threshold
         CircuitBreakerService.calculate_health(circuit)
         db.commit()
 
-        print("=================================")
-        print(f"FAILURE RECORDED: {endpoint_url}")
-        print(f"COUNT: {circuit.failure_count}/{circuit.failure_threshold}")
-        print("=================================")
+        logger.info(
+            f"Circuit failure recorded for {endpoint_url}",
+            extra={
+                "endpoint_url": endpoint_url,
+                "failures": circuit.failure_count,
+                "threshold": circuit.failure_threshold
+            }
+        )

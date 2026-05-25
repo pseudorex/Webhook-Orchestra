@@ -1,5 +1,6 @@
 import requests
 import time
+import logging
 
 from datetime import (
     datetime,
@@ -32,6 +33,9 @@ from app.services.reliability.dlq_service import (
 from app.services.reliability.circuit_breaker_service import (
     CircuitBreakerService
 )
+from app.core.logging import correlation_id_var, tenant_id_var, event_id_var
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookEngine:
@@ -42,6 +46,9 @@ class WebhookEngine:
         start = time.time()
 
         try:
+            # Explicitly align context variables for event-linked and tenant-linked logs
+            tenant_id_var.set(event.tenant_id)
+            event_id_var.set(event.id)
 
             # -----------------------------
             # FETCH TENANT
@@ -53,10 +60,7 @@ class WebhookEngine:
             )
 
             if not tenant:
-
-                raise Exception(
-                    "TENANT NOT FOUND"
-                )
+                raise Exception("TENANT NOT FOUND")
 
             # -----------------------------
             # RESOLVE TARGET URL
@@ -65,10 +69,7 @@ class WebhookEngine:
             target_url = endpoint_url or tenant.webhook_url
 
             if not target_url:
-
-                raise Exception(
-                    "NO ENDPOINT URL AVAILABLE"
-                )
+                raise Exception("NO ENDPOINT URL AVAILABLE")
 
             # =============================
             # CIRCUIT BREAKER CHECK
@@ -81,13 +82,10 @@ class WebhookEngine:
             )
 
             if not allowed:
-
-                print("=================================")
-                print(
-                    f"SKIPPED — CIRCUIT OPEN: "
-                    f"{target_url}"
+                logger.warning(
+                    f"Delivery skipped. Circuit is OPEN for {target_url}",
+                    extra={"target_url": target_url}
                 )
-                print("=================================")
 
                 # Schedule a retry after cooldown
                 WebhookEngine.handle_circuit_open(
@@ -120,16 +118,23 @@ class WebhookEngine:
             )
 
             # -----------------------------
-            # SEND WEBHOOK
+            # SEND WEBHOOK (Propagating Correlation ID outbound)
             # -----------------------------
+
+            headers = {
+                "X-Webhook-Signature": signature,
+                "X-Event-ID": str(event.id)
+            }
+
+            # Fetch current request's correlation ID
+            corr_id = correlation_id_var.get()
+            if corr_id:
+                headers["X-Correlation-ID"] = corr_id
 
             response = requests.post(
                 target_url,
                 json=payload,
-                headers={
-                    "X-Webhook-Signature": signature,
-                    "X-Event-ID": str(event.id)
-                },
+                headers=headers,
                 timeout=10
             )
 
@@ -144,7 +149,6 @@ class WebhookEngine:
             failure_type_value = None
 
             if response.status_code >= 400:
-
                 failure_type_value = (
                     FailureClassifier.classify(
                         status_code=response.status_code
@@ -170,17 +174,11 @@ class WebhookEngine:
             # -----------------------------
 
             if 200 <= response.status_code < 300:
-
                 event.status = "delivered"
-
                 event.delivered_at = datetime.now(timezone.utc)
-
                 event.last_error = None
-
                 event.failure_type = None
-
                 event.retryable = True
-
                 event.next_retry_at = None
 
                 # CIRCUIT BREAKER — record success
@@ -193,11 +191,10 @@ class WebhookEngine:
 
                 db.commit()
 
-                print("=================================")
-                print("WEBHOOK DELIVERED")
-                print("STATUS:", response.status_code)
-                print("ENDPOINT:", target_url)
-                print("=================================")
+                logger.info(
+                    "Webhook delivered successfully",
+                    extra={"status_code": response.status_code, "endpoint_url": target_url}
+                )
 
                 return
 
@@ -260,7 +257,6 @@ class WebhookEngine:
             )
 
             if target_url:
-
                 CircuitBreakerService.record_failure(
                     db=db,
                     endpoint_url=target_url,
@@ -287,11 +283,11 @@ class WebhookEngine:
 
     @staticmethod
     def handle_circuit_open(
-        db,
-        event,
-        endpoint_url,
-        subscription_id,
-        target_url
+            db,
+            event,
+            endpoint_url,
+            subscription_id,
+            target_url
     ):
 
         circuit = CircuitBreakerService.get_or_create(
@@ -310,11 +306,10 @@ class WebhookEngine:
 
         db.commit()
 
-        print("=================================")
-        print(
-            f"RETRY AFTER COOLDOWN: {delay}s"
+        logger.info(
+            f"Webhook delivery scheduled after circuit cooldown: {delay}s",
+            extra={"delay_seconds": delay}
         )
-        print("=================================")
 
         from worker.tasks import deliver_webhook
 
@@ -333,12 +328,12 @@ class WebhookEngine:
 
     @staticmethod
     def handle_failure(
-        db,
-        event,
-        failure_type,
-        error_message,
-        endpoint_url=None,
-        subscription_id=None
+            db,
+            event,
+            failure_type,
+            error_message,
+            endpoint_url=None,
+            subscription_id=None
     ):
 
         # -----------------------------
@@ -346,9 +341,7 @@ class WebhookEngine:
         # -----------------------------
 
         event.retry_count += 1
-
         event.failure_type = failure_type.value
-
         event.last_error = error_message
 
         retryable = FailureClassifier.is_retryable(
@@ -366,12 +359,10 @@ class WebhookEngine:
         # -----------------------------
 
         if (
-            not retryable
-            or event.retry_count > max_retries
+                not retryable
+                or event.retry_count > max_retries
         ):
-
             event.status = "dead"
-
             event.next_retry_at = None
 
             DLQService.move_to_dlq(
@@ -383,11 +374,10 @@ class WebhookEngine:
 
             db.commit()
 
-            print("=================================")
-            print("EVENT MOVED TO DLQ")
-            print("FAILURE TYPE:", failure_type.value)
-            print("ERROR:", error_message)
-            print("=================================")
+            logger.error(
+                "Event moved to DLQ",
+                extra={"failure_type": failure_type.value, "error": error_message}
+            )
 
             return
 
@@ -401,23 +391,19 @@ class WebhookEngine:
         )
 
         retry_time = (
-            datetime.now(timezone.utc)
-            + timedelta(seconds=delay)
+                datetime.now(timezone.utc)
+                + timedelta(seconds=delay)
         )
 
         event.status = "retrying"
-
         event.next_retry_at = retry_time
 
         db.commit()
 
-        print("=================================")
-        print(
-            f"RETRYING EVENT IN {delay} SECONDS"
+        logger.info(
+            f"Webhook scheduled for retry in {delay} seconds",
+            extra={"delay_seconds": delay, "failure_type": failure_type.value, "next_retry_at": retry_time.isoformat()}
         )
-        print("FAILURE TYPE:", failure_type.value)
-        print("NEXT RETRY:", retry_time)
-        print("=================================")
 
         # -----------------------------
         # IMPORT INSIDE FUNCTION
@@ -428,8 +414,6 @@ class WebhookEngine:
 
         # -----------------------------
         # CHECK CIRCUIT BEFORE RETRY
-        # If circuit just opened, use
-        # cooldown instead of backoff
         # -----------------------------
 
         from app.services.reliability.circuit_breaker_service import (
@@ -459,12 +443,10 @@ class WebhookEngine:
                 )
                 db.commit()
 
-                print("=================================")
-                print(
-                    f"CIRCUIT OPEN — USING COOLDOWN: "
-                    f"{delay}s"
+                logger.warning(
+                    f"Circuit open during retry setup. Using cooldown delay: {delay}s",
+                    extra={"delay_seconds": delay}
                 )
-                print("=================================")
 
         # Determine target queue based on retry count
         target_queue = "default" if event.retry_count <= 2 else "low_priority"
