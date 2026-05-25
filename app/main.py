@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from app.core.metrics import REGISTRY, update_queue_length_metrics
 
 from app.core.logging import (
     setup_app_logging,
@@ -53,6 +55,15 @@ app.include_router(replay_router)
 app.include_router(dlq_router)
 app.include_router(subscription_router)
 app.include_router(endpoint_router)
+
+@app.get("/metrics")
+def get_metrics():
+    # Update Redis queue length gauges dynamically right before scraping
+    update_queue_length_metrics()
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST
+    )
 
 
 @app.get("/")

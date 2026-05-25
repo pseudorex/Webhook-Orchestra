@@ -97,23 +97,33 @@ def task_prerun_handler(task=None, args=None, **kwargs):
     """Restores context variables when a Celery worker starts a task."""
     request = task.request if task else None
     if request:
+        # 1. Try reading from request attributes (Celery flattens custom headers here)
+        corr_id = getattr(request, "correlation_id", None)
+        t_id = getattr(request, "tenant_id", None)
+        e_id = getattr(request, "event_id", None)
+
+        # 2. Fallback to request.headers dictionary if attributes are missing
         headers = getattr(request, "headers", {}) or {}
-        corr_id = headers.get("correlation_id")
+        if not corr_id:
+            corr_id = headers.get("correlation_id")
+        if not t_id:
+            t_id = headers.get("tenant_id")
+        if not e_id:
+            e_id = headers.get("event_id")
+
+        # 3. Apply to logging context vars (or fallback to generating a new UUID for correlation ID)
         if corr_id:
             correlation_id_var.set(corr_id)
         else:
             correlation_id_var.set(str(uuid.uuid4()))
 
-        t_id = headers.get("tenant_id")
         if t_id:
             tenant_id_var.set(t_id)
 
-        e_id = headers.get("event_id")
         if e_id:
             event_id_var.set(e_id)
         elif task.name == "worker.tasks.deliver_webhook" and args:
             event_id_var.set(args[0])
-
 
 @task_postrun.connect
 def task_postrun_handler(**kwargs):

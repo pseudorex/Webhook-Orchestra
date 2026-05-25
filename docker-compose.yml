@@ -22,6 +22,10 @@ services:
     build: .
     container_name: webhook_worker_high
     command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=4 -Q high_priority
+    ports:
+      - "8001:8001"
+    environment:
+        - METRICS_PORT=8001
     depends_on:
       - redis
     env_file:
@@ -33,6 +37,10 @@ services:
     build: .
     container_name: webhook_worker_retry
     command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=2 -Q default,low_priority
+    ports:
+      - "8002:8002"
+    environment:
+        - METRICS_PORT=8002
     depends_on:
       - redis
     env_file:

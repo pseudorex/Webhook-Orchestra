@@ -196,6 +196,16 @@ class WebhookEngine:
                     extra={"status_code": response.status_code, "endpoint_url": target_url}
                 )
 
+                # prometheus: record delivery success metrics
+                from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+                latency_sec = latency / 1000.0
+                WEBHOOK_DELIVERIES_TOTAL.labels(
+                    tenant_id=str(event.tenant_id),
+                    status="success",
+                    status_code=str(response.status_code)
+                ).inc()
+                WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+
                 return
 
             # -----------------------------
@@ -213,6 +223,16 @@ class WebhookEngine:
                 tenant_id=event.tenant_id,
                 latency_ms=latency,
             )
+
+            # prometheus: record failed delivery status code metric
+            from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+            latency_sec = latency / 1000.0
+            WEBHOOK_DELIVERIES_TOTAL.labels(
+                tenant_id=str(event.tenant_id),
+                status="failure",
+                status_code=str(response.status_code)
+            ).inc()
+            WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
 
             WebhookEngine.handle_failure(
                 db=db,
@@ -264,6 +284,16 @@ class WebhookEngine:
                     latency_ms=latency,
                 )
 
+            # prometheus: record execution exception metric
+            from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+            latency_sec = latency / 1000.0
+            WEBHOOK_DELIVERIES_TOTAL.labels(
+                tenant_id=str(event.tenant_id),
+                status="failure",
+                status_code="exception"
+            ).inc()
+            WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+
             # -----------------------------
             # HANDLE FAILURE
             # -----------------------------
@@ -310,6 +340,13 @@ class WebhookEngine:
             f"Webhook delivery scheduled after circuit cooldown: {delay}s",
             extra={"delay_seconds": delay}
         )
+
+        # prometheus: track circuit open retry schedule
+        from app.core.metrics import WEBHOOK_RETRIES_TOTAL
+        WEBHOOK_RETRIES_TOTAL.labels(
+            tenant_id=str(event.tenant_id),
+            retry_count="circuit_cooldown"
+        ).inc()
 
         from worker.tasks import deliver_webhook
 
@@ -379,6 +416,13 @@ class WebhookEngine:
                 extra={"failure_type": failure_type.value, "error": error_message}
             )
 
+            # prometheus: track DLQ move metric
+            from app.core.metrics import WEBHOOK_DLQ_MOVES_TOTAL
+            WEBHOOK_DLQ_MOVES_TOTAL.labels(
+                tenant_id=str(event.tenant_id),
+                failure_type=failure_type.value
+            ).inc()
+
             return
 
         # -----------------------------
@@ -404,6 +448,13 @@ class WebhookEngine:
             f"Webhook scheduled for retry in {delay} seconds",
             extra={"delay_seconds": delay, "failure_type": failure_type.value, "next_retry_at": retry_time.isoformat()}
         )
+
+        # prometheus: track standard backoff retry schedule
+        from app.core.metrics import WEBHOOK_RETRIES_TOTAL
+        WEBHOOK_RETRIES_TOTAL.labels(
+            tenant_id=str(event.tenant_id),
+            retry_count=str(event.retry_count)
+        ).inc()
 
         # -----------------------------
         # IMPORT INSIDE FUNCTION
