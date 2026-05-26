@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'Webhook Orchestra Dashboards'
+    orgId: 1
+    folder: 'Webhook Orchestra'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

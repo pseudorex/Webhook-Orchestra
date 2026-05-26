@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Scraping metrics from the FastAPI Backend
+  - job_name: 'webhook-backend'
+    static_configs:
+      - targets: ['backend:8000']
+
+  # Scraping metrics from Celery Worker High
+  - job_name: 'webhook-worker-high'
+    static_configs:
+      - targets: ['worker-high:8001']
+
+  # Scraping metrics from Celery Worker Retry (covers default & low priority queues)
+  - job_name: 'webhook-worker-retry'
+    static_configs:
+      - targets: ['worker-retry:8002']

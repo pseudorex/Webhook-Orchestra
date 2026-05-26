@@ -1,0 +1,121 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Throughput - Delivery Attempts per Second",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(webhook_deliveries_total[1m])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "title": "Throughput - p95 Delivery Latency (Seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(webhook_delivery_latency_seconds_bucket[1m])) by (le, tenant_id))",
+          "legendFormat": "Tenant {{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "title": "Queue - Current Backlog Lengths",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "webhook_queue_length",
+          "legendFormat": "{{queue_name}}"
+        }
+      ]
+    },
+    {
+      "title": "Failures - DLQ Moves (Dead Letter Events)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(webhook_dlq_moves_total[5m]))"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "title": "Failures - DLQ Types",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(webhook_dlq_moves_total) by (failure_type)"
+        }
+      ]
+    },
+    {
+      "title": "Retries - Attempts Scheduled",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(webhook_retries_total[1m])) by (tenant_id)",
+          "legendFormat": "Tenant {{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "title": "Workers - Task Process Duration (Seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(worker_task_duration_seconds_bucket[1m])) by (le, task_name))",
+          "legendFormat": "{{task_name}}"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["webhook-orchestra"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Webhook Orchestra Core Performance",
+  "uid": "webhook-orchestra-core",
+  "version": 1
+}
