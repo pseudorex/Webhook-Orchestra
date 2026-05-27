@@ -1,0 +1,76 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: 'Webhook Orchestra Alerts'
+    folder: 'Webhook Orchestra'
+    interval: 10s
+    rules:
+      - uid: dlq_size_exceeded
+        title: 'DLQ Size Exceeded'
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus-datasource
+            model:
+              expr: 'webhook_dlq_size > 10'
+              intervalMs: 10000
+              maxDataPoints: 43200
+              refId: A
+        noDataState: OK
+        execErrState: OK
+        for: 10s
+        annotations:
+          summary: 'DLQ Size is high'
+          description: 'The DLQ size is currently {{ $values.A }} which exceeds the threshold.'
+        labels:
+          severity: critical
+
+      - uid: high_priority_congested
+        title: 'High Priority Queue Congested'
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus-datasource
+            model:
+              expr: 'webhook_queue_length{queue_name="high_priority"} > 50'
+              intervalMs: 10000
+              maxDataPoints: 43200
+              refId: A
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          summary: 'High priority queue congestion'
+          description: 'The high_priority queue has been congested for more than 5 minutes (current queue length: {{ $values.A }}).'
+        labels:
+          severity: warning
+
+      - uid: endpoint_health_critical
+        title: 'Endpoint Health Critical'
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus-datasource
+            model:
+              expr: 'webhook_endpoint_health_score < 50'
+              intervalMs: 10000
+              maxDataPoints: 43200
+              refId: A
+        noDataState: OK
+        execErrState: OK
+        for: 10s
+        annotations:
+          summary: 'Endpoint Health Score below 50'
+          description: 'Endpoint {{ $labels.endpoint_url }} for Tenant {{ $labels.tenant_id }} has a health score of {{ $values.A }}.'
+        labels:
+          severity: critical

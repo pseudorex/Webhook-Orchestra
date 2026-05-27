@@ -35,10 +35,10 @@ def run_load_test():
     failing_sub = {
         "tenant_id": tenant_id,
         "topic": "order.created",
-        "endpoint_url": "http://localhost:9999/nonexistent-endpoint"  # Will fail immediately
+        "endpoint_url": "https://httpstat.us/400"  # Will trigger immediate DLQ move
     }
     requests.post(f"{BASE_URL}/subscriptions/", json=failing_sub).raise_for_status()
-    print("✅ Created failing subscription pointing to: port 9999 (will cause retries & DLQ)")
+    print("✅ Created failing subscription pointing to: httpstat.us/400 (will cause immediate DLQ)")
 
     # 4. Publish events
     headers = {"x-api-key": api_key}

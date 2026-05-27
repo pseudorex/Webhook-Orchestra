@@ -21,14 +21,14 @@
   "links": [],
   "liveNow": false,
   "panels": [
-    {
+        {
       "title": "Throughput - Delivery Attempts per Second",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(webhook_deliveries_total[1m])) by (status)",
-          "legendFormat": "{{status}}"
+          "expr": "sum(rate(webhook_delivery_attempts_total[1m])) by (status_code)",
+          "legendFormat": "{{status_code}}"
         }
       ]
     },
@@ -38,7 +38,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(webhook_delivery_latency_seconds_bucket[1m])) by (le, tenant_id))",
+          "expr": "histogram_quantile(0.95, sum(rate(webhook_delivery_latencies_seconds_bucket[1m])) by (le, tenant_id))",
           "legendFormat": "Tenant {{tenant_id}}"
         }
       ]

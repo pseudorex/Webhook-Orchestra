@@ -197,14 +197,14 @@ class WebhookEngine:
                 )
 
                 # prometheus: record delivery success metrics
-                from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+                from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
                 latency_sec = latency / 1000.0
-                WEBHOOK_DELIVERIES_TOTAL.labels(
+                WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                     tenant_id=str(event.tenant_id),
-                    status="success",
-                    status_code=str(response.status_code)
+                    status_code=str(response.status_code),
+                    error_class="None"
                 ).inc()
-                WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+                WEBHOOK_DELIVERY_LATENCIES_SECONDS.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
 
                 return
 
@@ -225,14 +225,14 @@ class WebhookEngine:
             )
 
             # prometheus: record failed delivery status code metric
-            from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+            from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
             latency_sec = latency / 1000.0
-            WEBHOOK_DELIVERIES_TOTAL.labels(
+            WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                 tenant_id=str(event.tenant_id),
-                status="failure",
-                status_code=str(response.status_code)
+                status_code=str(response.status_code),
+                error_class=failure_type.value
             ).inc()
-            WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+            WEBHOOK_DELIVERY_LATENCIES_SECONDS.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
 
             WebhookEngine.handle_failure(
                 db=db,
@@ -285,14 +285,14 @@ class WebhookEngine:
                 )
 
             # prometheus: record execution exception metric
-            from app.core.metrics import WEBHOOK_DELIVERIES_TOTAL, WEBHOOK_DELIVERY_LATENCY
+            from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
             latency_sec = latency / 1000.0
-            WEBHOOK_DELIVERIES_TOTAL.labels(
+            WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                 tenant_id=str(event.tenant_id),
-                status="failure",
-                status_code="exception"
+                status_code="exception",
+                error_class=failure_type.value
             ).inc()
-            WEBHOOK_DELIVERY_LATENCY.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+            WEBHOOK_DELIVERY_LATENCIES_SECONDS.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
 
             # -----------------------------
             # HANDLE FAILURE

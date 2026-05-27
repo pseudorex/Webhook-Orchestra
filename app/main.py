@@ -1,3 +1,6 @@
+from app.core.tracing import setup_tracing, instrument_app
+setup_tracing("webhook-backend")
+
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid
@@ -23,6 +26,9 @@ from app.api.routes.subscription import router as subscription_router
 from app.api.routes.endpoints import router as endpoint_router
 
 app = FastAPI(title="Webhook Orchestra")
+
+# 2. Instrument the FastAPI app for OpenTelemetry
+instrument_app(app)
 
 
 class LoggingContextMiddleware(BaseHTTPMiddleware):
@@ -56,10 +62,17 @@ app.include_router(dlq_router)
 app.include_router(subscription_router)
 app.include_router(endpoint_router)
 
+
+# 3. Change this endpoint to async so we can query database metrics asynchronously
 @app.get("/metrics")
-def get_metrics():
+async def get_metrics():
     # Update Redis queue length gauges dynamically right before scraping
     update_queue_length_metrics()
+
+    # Query database and update DLQ / Health metrics
+    from app.core.metrics import update_database_metrics
+    await update_database_metrics()
+
     return Response(
         content=generate_latest(REGISTRY),
         media_type=CONTENT_TYPE_LATEST
