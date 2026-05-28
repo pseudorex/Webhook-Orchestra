@@ -1,11 +1,8 @@
-from fastapi import (
-    APIRouter,
-    Depends, HTTPException
-)
+from fastapi import APIRouter, Depends, HTTPException
 from app.api.dependencies.database import get_db
-from app.models.dead_letter_event import (
-    DeadLetterEvent
-)
+from app.api.dependencies.auth import get_current_tenant
+from app.models.tenant import Tenant
+from app.models.dead_letter_event import DeadLetterEvent
 from app.models.event import Event
 
 router = APIRouter(
@@ -13,19 +10,21 @@ router = APIRouter(
     tags=["DLQ"]
 )
 
-
-from sqlalchemy.ext.asyncio import AsyncSession    # ← replace sqlalchemy.orm.Session
-from sqlalchemy import select                       # ← add this import
-from worker.tasks import deliver_webhook            # ← add this to actually enqueue
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from worker.tasks import deliver_webhook
 
 @router.get("/")
-async def get_dead_events(                          # ← add async
+async def get_dead_events(
     skip: int = 0,
     limit: int = 10,
-    db: AsyncSession = Depends(get_db)              # ← AsyncSession
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant)
 ):
-    result = await db.execute(                      # ← await db.execute + select()
+    result = await db.execute(
         select(DeadLetterEvent)
+        .join(Event, DeadLetterEvent.original_event_id == Event.id)
+        .where(Event.tenant_id == tenant.id)
         .offset(skip)
         .limit(limit)
     )
@@ -34,24 +33,29 @@ async def get_dead_events(                          # ← add async
 
 
 @router.post("/{dead_event_id}/replay")
-async def replay_dead_event(                        # ← add async
+async def replay_dead_event(
     dead_event_id: int,
-    db: AsyncSession = Depends(get_db)              # ← AsyncSession
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant)
 ):
-    result = await db.execute(                      # ← await + select
-        select(DeadLetterEvent).where(
-            DeadLetterEvent.id == dead_event_id
+    # Fetch dead letter event joined with Event to verify ownership
+    result = await db.execute(
+        select(DeadLetterEvent)
+        .join(Event, DeadLetterEvent.original_event_id == Event.id)
+        .where(
+            DeadLetterEvent.id == dead_event_id,
+            Event.tenant_id == tenant.id
         )
     )
     dead_event = result.scalar_one_or_none()
 
     if not dead_event:
-        raise HTTPException(                        # ← use HTTPException, not dict
+        raise HTTPException(
             status_code=404,
             detail="Dead event not found"
         )
 
-    result = await db.execute(                      # ← await + select
+    result = await db.execute(
         select(Event).where(
             Event.id == dead_event.original_event_id
         )
@@ -64,14 +68,13 @@ async def replay_dead_event(                        # ← add async
             detail="Original event not found"
         )
 
-    event.status = "retrying"                       # ← lowercase, matching webhook_engine
+    event.status = "retrying"
     event.retry_count = 0
     event.failure_type = None
     event.last_error = None
 
     dead_event.replay_count += 1
-
-    await db.commit()                               # ← single await commit
+    await db.commit()
 
     deliver_webhook.apply_async(
         args=[event.id],

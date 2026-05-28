@@ -12,6 +12,7 @@ services:
       - OTEL_SERVICE_NAME=webhook-backend
     depends_on:
       - redis
+      - rabbitmq
       - jaeger
     volumes:
       - .:/app
@@ -29,6 +30,7 @@ services:
       - OTEL_SERVICE_NAME=webhook-worker-high
     depends_on:
       - redis
+      - rabbitmq
       - jaeger
     env_file:
       - .env
@@ -47,11 +49,19 @@ services:
       - OTEL_SERVICE_NAME=webhook-worker-retry
     depends_on:
       - redis
+      - rabbitmq
       - jaeger
     env_file:
       - .env
     volumes:
       - .:/app
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: webhook_rabbitmq
+    ports:
+      - "5672:5672"      # AMQP protocol
+      - "15672:15672"    # Management Dashboard
 
   redis:
     image: redis:7-alpine

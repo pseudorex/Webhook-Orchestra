@@ -1,6 +1,6 @@
 from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
-import redis
 import os
+import requests
 
 # Create custom registry to prevent mix-ups with python system metrics
 REGISTRY = CollectorRegistry()
@@ -40,7 +40,7 @@ WEBHOOK_DLQ_MOVES_TOTAL = Counter(
 # 4. Queue Length Gauge
 WEBHOOK_QUEUE_LENGTH = Gauge(
     "webhook_queue_length",
-    "Current length of the Celery queue in Redis",
+    "Current length of the Celery queue in RabbitMQ",
     ["queue_name"],
     registry=REGISTRY
 )
@@ -75,26 +75,33 @@ WORKER_TASK_DURATION = Histogram(
     registry=REGISTRY
 )
 
-# Redis client
-try:
-    redis_client = redis.Redis(
-        host=os.getenv("REDIS_HOST", "redis"),
-        port=int(os.getenv("REDIS_PORT", 6379)),
-        db=0
-    )
-except Exception:
-    redis_client = None
+# RabbitMQ configuration
+RABBITMQ_API_URL = os.getenv("RABBITMQ_API_URL", "http://rabbitmq:15672/api/queues/%2F")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
+
+
+def get_rabbitmq_queue_length(queue_name: str) -> int:
+    """Queries RabbitMQ HTTP Management API to fetch queue message count."""
+    try:
+        response = requests.get(
+            f"{RABBITMQ_API_URL}/{queue_name}",
+            auth=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+            timeout=1
+        )
+        if response.status_code == 200:
+            return response.json().get("messages", 0)
+    except Exception:
+        pass
+    return 0
+
 
 def update_queue_length_metrics():
-    """Queries Redis queue length metrics."""
-    if not redis_client:
-        return
+    """Queries RabbitMQ queue length metrics."""
     for queue_name in ["high_priority", "default", "low_priority"]:
-        try:
-            length = redis_client.llen(queue_name)
-            WEBHOOK_QUEUE_LENGTH.labels(queue_name=queue_name).set(length)
-        except Exception:
-            WEBHOOK_QUEUE_LENGTH.labels(queue_name=queue_name).set(0)
+        length = get_rabbitmq_queue_length(queue_name)
+        WEBHOOK_QUEUE_LENGTH.labels(queue_name=queue_name).set(length)
+
 
 async def update_database_metrics():
     """Queries PostgreSQL to fetch DLQ size and Endpoint health scores before scrape."""

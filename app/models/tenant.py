@@ -26,3 +26,6 @@ class Tenant(Base):
         server_default=func.now()
     )
     webhook_secret = Column(String, nullable=True)
+    events_sent_count = Column(Integer, default=0, nullable=False)
+    delivery_attempts_count = Column(Integer, default=0, nullable=False)
+    retries_count = Column(Integer, default=0, nullable=False)

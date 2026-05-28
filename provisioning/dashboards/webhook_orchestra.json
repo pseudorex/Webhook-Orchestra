@@ -21,25 +21,33 @@
   "links": [],
   "liveNow": false,
   "panels": [
-        {
+            {
       "title": "Throughput - Delivery Attempts per Second",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
           "expr": "sum(rate(webhook_delivery_attempts_total[1m])) by (status_code)",
-          "legendFormat": "{{status_code}}"
+          "legendFormat": "Status {{status_code}}"
         }
       ]
     },
     {
-      "title": "Throughput - p95 Delivery Latency (Seconds)",
+      "title": "Throughput - Delivery Latency percentiles (Seconds)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
+          "expr": "histogram_quantile(0.50, sum(rate(webhook_delivery_latencies_seconds_bucket[1m])) by (le, tenant_id))",
+          "legendFormat": "Tenant {{tenant_id}} (p50)"
+        },
+        {
           "expr": "histogram_quantile(0.95, sum(rate(webhook_delivery_latencies_seconds_bucket[1m])) by (le, tenant_id))",
-          "legendFormat": "Tenant {{tenant_id}}"
+          "legendFormat": "Tenant {{tenant_id}} (p95)"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(webhook_delivery_latencies_seconds_bucket[1m])) by (le, tenant_id))",
+          "legendFormat": "Tenant {{tenant_id}} (p99)"
         }
       ]
     },

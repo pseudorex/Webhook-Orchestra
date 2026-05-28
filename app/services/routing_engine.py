@@ -1,5 +1,5 @@
 import os
-import redis
+import requests
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,26 +8,36 @@ from worker.tasks import deliver_webhook
 
 logger = logging.getLogger(__name__)
 
-# Initialize Redis Client to query queue lengths
-try:
-    redis_client = redis.Redis(
-        host=os.getenv("REDIS_HOST", "redis"),
-        port=int(os.getenv("REDIS_PORT", 6379)),
-        db=0
-    )
-except Exception:
-    redis_client = None
+# Initialize RabbitMQ variables
+RABBITMQ_API_URL = os.getenv("RABBITMQ_API_URL", "http://rabbitmq:15672/api/queues/%2F")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
+
+
+def get_rabbitmq_queue_length(queue_name: str) -> int:
+    """Queries RabbitMQ HTTP Management API to fetch queue message count."""
+    try:
+        response = requests.get(
+            f"{RABBITMQ_API_URL}/{queue_name}",
+            auth=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+            timeout=1
+        )
+        if response.status_code == 200:
+            return response.json().get("messages", 0)
+    except Exception as e:
+        logger.error(f"Error querying RabbitMQ API: {e}")
+    return 0
 
 
 def get_adaptive_queue(base_queue: str) -> str:
     """
-    Checks the queue length of the high-priority queue.
+    Checks the queue length of the high-priority queue in RabbitMQ.
     If it is congested (> 10 items), dynamically demotes
     new events to the default queue to prevent starvation.
     """
-    if base_queue == "high_priority" and redis_client:
+    if base_queue == "high_priority":
         try:
-            high_len = redis_client.llen("high_priority")
+            high_len = get_rabbitmq_queue_length("high_priority")
             if high_len > 10:  # Threshold of 10 for easier testing
                 logger.warning(
                     f"HIGH PRIORITY CONGESTED ({high_len} tasks). Routing to default.",
@@ -35,7 +45,7 @@ def get_adaptive_queue(base_queue: str) -> str:
                 )
                 return "default"
         except Exception as e:
-            logger.error(f"Error reading Redis queue length: {e}", exc_info=True)
+            logger.error(f"Error reading RabbitMQ queue length: {e}", exc_info=True)
     return base_queue
 
 

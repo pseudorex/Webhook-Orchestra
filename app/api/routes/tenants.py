@@ -10,6 +10,7 @@ import secrets
 from app.models.tenant import Tenant
 from app.core.security import generate_api_key
 from app.api.dependencies.database import get_db
+from app.api.dependencies.auth import get_current_tenant
 
 
 router = APIRouter(
@@ -53,3 +54,10 @@ async def register_tenant(
     await db.commit()
     await db.refresh(new_tenant)
     return new_tenant
+
+
+@router.get("/me", response_model=TenantResponse)
+async def get_my_tenant(
+    tenant: Tenant = Depends(get_current_tenant)
+):
+    return tenant

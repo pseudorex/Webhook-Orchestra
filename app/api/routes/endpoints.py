@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.api.dependencies.auth import get_current_tenant
+from app.models.tenant import Tenant
 
 from app.api.dependencies.database import get_db
 from app.models.circuit_breaker import CircuitBreaker
@@ -11,8 +13,13 @@ router = APIRouter(
 )
 
 @router.get("/health")
-async def get_endpoints_health(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CircuitBreaker))
+async def get_endpoints_health(
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant)
+):
+    result = await db.execute(
+        select(CircuitBreaker).where(CircuitBreaker.tenant_id == tenant.id)
+    )
     endpoints = result.scalars().all()
     return [
         {

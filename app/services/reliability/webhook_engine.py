@@ -62,6 +62,9 @@ class WebhookEngine:
             if not tenant:
                 raise Exception("TENANT NOT FOUND")
 
+            # Increment tenant delivery attempts counter
+            tenant.delivery_attempts_count += 1
+
             # -----------------------------
             # RESOLVE TARGET URL
             # -----------------------------
@@ -334,6 +337,11 @@ class WebhookEngine:
                 + timedelta(seconds=delay)
         )
 
+        # Increment tenant retries counter
+        tenant = db.get(Tenant, event.tenant_id)
+        if tenant:
+            tenant.retries_count += 1
+
         db.commit()
 
         logger.info(
@@ -441,6 +449,11 @@ class WebhookEngine:
 
         event.status = "retrying"
         event.next_retry_at = retry_time
+
+        # Increment tenant retries counter
+        tenant = db.get(Tenant, event.tenant_id)
+        if tenant:
+            tenant.retries_count += 1
 
         db.commit()
 

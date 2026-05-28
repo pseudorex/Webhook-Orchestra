@@ -14,6 +14,9 @@ class TenantResponse(BaseModel):
     api_key: str
     webhook_url: str | None
     webhook_secret: str
+    events_sent_count: int
+    delivery_attempts_count: int
+    retries_count: int
 
     class Config:
         from_attributes = True

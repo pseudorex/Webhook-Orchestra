@@ -67,6 +67,7 @@ async def create_event(
     )
 
     db.add(new_event)
+    tenant.events_sent_count += 1  # Increment usage counter
     await db.commit()
     await db.refresh(new_event)
 
@@ -91,6 +92,7 @@ async def dead_events(
 ):
     events = await get_dead_events(
         db=db,
+        tenant_id=tenant.id,  # Scoped by tenant
         limit=limit,
         offset=offset
     )

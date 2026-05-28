@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 celery = Celery(
     "webhook_tasks",
-    broker="redis://redis:6379/0",
-    backend="redis://redis:6379/0",
+    broker="amqp://guest:guest@rabbitmq:5672//",
+    backend="rpc://",
     include=["worker.tasks"]
 )
 
