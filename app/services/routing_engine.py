@@ -4,6 +4,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.subscription_service import SubscriptionCRUD
+from app.models.subscription_delivery import SubscriptionDelivery # ← Imported SubscriptionDelivery model
 from worker.tasks import deliver_webhook
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def get_adaptive_queue(base_queue: str) -> str:
     if base_queue == "high_priority":
         try:
             high_len = get_rabbitmq_queue_length("high_priority")
-            if high_len > 10:  # Threshold of 10 for easier testing
+            if high_len > 2000:  # Production congestion threshold of 2000 tasks
                 logger.warning(
                     f"HIGH PRIORITY CONGESTED ({high_len} tasks). Routing to default.",
                     extra={"queue": "high_priority"}
@@ -75,10 +76,21 @@ class RoutingEngine:
                 extra={"subscription_id": subscription.id}
             )
 
+            # Create a SubscriptionDelivery record to track this specific delivery attempt
+            delivery = SubscriptionDelivery(
+                event_id=event.id,
+                subscription_id=subscription.id,
+                status="pending"
+            )
+            db.add(delivery)
+            await db.commit()
+            await db.refresh(delivery)
+
             # Determine the queue dynamically
             target_queue = get_adaptive_queue("high_priority")
 
+            # Queue the worker task using the subscription_delivery_id
             deliver_webhook.apply_async(
-                args=[event.id, subscription.endpoint_url, subscription.id],
+                args=[delivery.id],
                 queue=target_queue
             )

@@ -5,3 +5,4 @@ from app.models.delivery_attempt import DeliveryAttempt
 from app.models.dead_letter_event import DeadLetterEvent
 from app.models.processed_webhook import ProcessedWebhook
 from app.models.circuit_breaker import CircuitBreaker
+from app.models.subscription_delivery import SubscriptionDelivery # ← Added SubscriptionDelivery to package exports

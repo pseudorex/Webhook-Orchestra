@@ -55,29 +55,37 @@ async def replay_dead_event(
             detail="Dead event not found"
         )
 
+    # Load associated subscription delivery
+    from app.models.subscription_delivery import SubscriptionDelivery
+    if not dead_event.subscription_delivery_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This dead event does not have an associated subscription delivery."
+        )
+
     result = await db.execute(
-        select(Event).where(
-            Event.id == dead_event.original_event_id
+        select(SubscriptionDelivery).where(
+            SubscriptionDelivery.id == dead_event.subscription_delivery_id
         )
     )
-    event = result.scalar_one_or_none()
+    delivery = result.scalar_one_or_none()
 
-    if not event:
+    if not delivery:
         raise HTTPException(
             status_code=404,
-            detail="Original event not found"
+            detail="Subscription delivery not found"
         )
 
-    event.status = "retrying"
-    event.retry_count = 0
-    event.failure_type = None
-    event.last_error = None
+    delivery.status = "retrying"
+    delivery.retry_count = 0
+    delivery.failure_type = None
+    delivery.last_error = None
 
     dead_event.replay_count += 1
     await db.commit()
 
     deliver_webhook.apply_async(
-        args=[event.id],
+        args=[delivery.id], # ← Pass delivery.id instead of event.id
         queue="low_priority"
     )
 

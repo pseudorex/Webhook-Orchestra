@@ -4,6 +4,8 @@ from sqlalchemy import (
     String,
     DateTime,
     Float,
+    ForeignKey,
+    UniqueConstraint
 )
 
 from sqlalchemy.sql import func
@@ -24,12 +26,12 @@ class CircuitBreaker(Base):
     endpoint_url = Column(
         String,
         nullable=False,
-        unique=True,
-        index=True
+        index=True # ← Removed unique=True
     )
 
     tenant_id = Column(
         Integer,
+        ForeignKey("tenants.id"), # ← Added ForeignKey constraint
         nullable=False,
         index=True
     )
@@ -136,4 +138,9 @@ class CircuitBreaker(Base):
         String,
         default="healthy",
         nullable=False
+    )
+
+    # Composite unique constraint to ensure endpoint is unique per tenant
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "endpoint_url", name="uq_tenant_endpoint"),
     )

@@ -21,7 +21,7 @@ services:
   worker-high:
     build: .
     container_name: webhook_worker_high
-    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=4 -Q high_priority
+    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=32 --pool=threads -Q high_priority
     ports:
       - "8001:8001"
     environment:
@@ -40,7 +40,7 @@ services:
   worker-retry:
     build: .
     container_name: webhook_worker_retry
-    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=2 -Q default,low_priority
+    command: celery -A worker.celery_app:celery worker --loglevel=info --concurrency=16 --pool=threads -Q default,low_priority
     ports:
       - "8002:8002"
     environment:

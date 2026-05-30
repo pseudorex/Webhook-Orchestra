@@ -41,11 +41,18 @@ logger = logging.getLogger(__name__)
 class WebhookEngine:
 
     @staticmethod
-    def process_event(db, event, endpoint_url=None, subscription_id=None):
+    def process_event(db, delivery): # ← Changed parameter to delivery
 
         start = time.time()
 
         try:
+            from app.models.event import Event
+            from app.models.subscription import Subscription
+
+            event = db.get(Event, delivery.event_id)
+            if not event:
+                raise Exception("EVENT NOT FOUND")
+
             # Explicitly align context variables for event-linked and tenant-linked logs
             tenant_id_var.set(event.tenant_id)
             event_id_var.set(event.id)
@@ -69,7 +76,13 @@ class WebhookEngine:
             # RESOLVE TARGET URL
             # -----------------------------
 
-            target_url = endpoint_url or tenant.webhook_url
+            target_url = None
+            if delivery.subscription_id:
+                subscription = db.get(Subscription, delivery.subscription_id)
+                if subscription:
+                    target_url = subscription.endpoint_url
+            if not target_url:
+                target_url = tenant.webhook_url
 
             if not target_url:
                 raise Exception("NO ENDPOINT URL AVAILABLE")
@@ -93,9 +106,7 @@ class WebhookEngine:
                 # Schedule a retry after cooldown
                 WebhookEngine.handle_circuit_open(
                     db=db,
-                    event=event,
-                    endpoint_url=endpoint_url,
-                    subscription_id=subscription_id,
+                    delivery=delivery,
                     target_url=target_url,
                 )
 
@@ -165,7 +176,7 @@ class WebhookEngine:
             DeliveryAttemptService.log_attempt(
                 db=db,
                 event_id=event.id,
-                attempt_number=event.retry_count + 1,
+                attempt_number=delivery.retry_count + 1, # ← Tracked on delivery record
                 status_code=response.status_code,
                 response_body=response.text,
                 response_time_ms=latency,
@@ -177,12 +188,11 @@ class WebhookEngine:
             # -----------------------------
 
             if 200 <= response.status_code < 300:
-                event.status = "delivered"
-                event.delivered_at = datetime.now(timezone.utc)
-                event.last_error = None
-                event.failure_type = None
-                event.retryable = True
-                event.next_retry_at = None
+                delivery.status = "delivered" # ← Tracked on delivery record
+                delivery.delivered_at = datetime.now(timezone.utc)
+                delivery.last_error = None
+                delivery.failure_type = None
+                delivery.next_retry_at = None
 
                 # CIRCUIT BREAKER — record success
                 CircuitBreakerService.record_success(
@@ -239,11 +249,10 @@ class WebhookEngine:
 
             WebhookEngine.handle_failure(
                 db=db,
-                event=event,
+                delivery=delivery,
                 failure_type=failure_type,
                 error_message=response.text,
-                endpoint_url=endpoint_url,
-                subscription_id=subscription_id
+                target_url=target_url
             )
 
         except Exception as error:
@@ -266,20 +275,26 @@ class WebhookEngine:
 
             DeliveryAttemptService.log_attempt(
                 db=db,
-                event_id=event.id,
-                attempt_number=event.retry_count + 1,
+                event_id=delivery.event_id,
+                attempt_number=delivery.retry_count + 1, # ← Tracked on delivery record
                 response_time_ms=latency,
                 failure_type=failure_type.value
             )
 
             # CIRCUIT BREAKER — record failure
-            target_url = endpoint_url or getattr(
-                db.get(Tenant, event.tenant_id),
-                'webhook_url',
-                None
-            )
+            from app.models.event import Event
+            event = db.get(Event, delivery.event_id)
+            target_url = None
+            if delivery.subscription_id:
+                from app.models.subscription import Subscription
+                subscription = db.get(Subscription, delivery.subscription_id)
+                if subscription:
+                    target_url = subscription.endpoint_url
+            if not target_url and event:
+                tenant = db.get(Tenant, event.tenant_id)
+                target_url = tenant.webhook_url if tenant else None
 
-            if target_url:
+            if target_url and event:
                 CircuitBreakerService.record_failure(
                     db=db,
                     endpoint_url=target_url,
@@ -288,14 +303,15 @@ class WebhookEngine:
                 )
 
             # prometheus: record execution exception metric
-            from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
-            latency_sec = latency / 1000.0
-            WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
-                tenant_id=str(event.tenant_id),
-                status_code="exception",
-                error_class=failure_type.value
-            ).inc()
-            WEBHOOK_DELIVERY_LATENCIES_SECONDS.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
+            if event:
+                from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
+                latency_sec = latency / 1000.0
+                WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
+                    tenant_id=str(event.tenant_id),
+                    status_code="exception",
+                    error_class=failure_type.value
+                ).inc()
+                WEBHOOK_DELIVERY_LATENCIES_SECONDS.labels(tenant_id=str(event.tenant_id)).observe(latency_sec)
 
             # -----------------------------
             # HANDLE FAILURE
@@ -303,11 +319,10 @@ class WebhookEngine:
 
             WebhookEngine.handle_failure(
                 db=db,
-                event=event,
+                delivery=delivery,
                 failure_type=failure_type,
                 error_message=str(error),
-                endpoint_url=endpoint_url,
-                subscription_id=subscription_id
+                target_url=target_url
             )
 
     # =========================================
@@ -317,11 +332,11 @@ class WebhookEngine:
     @staticmethod
     def handle_circuit_open(
             db,
-            event,
-            endpoint_url,
-            subscription_id,
+            delivery,
             target_url
     ):
+        from app.models.event import Event
+        event = db.get(Event, delivery.event_id)
 
         circuit = CircuitBreakerService.get_or_create(
             db=db,
@@ -331,8 +346,8 @@ class WebhookEngine:
 
         delay = circuit.cooldown_seconds
 
-        event.status = "circuit_open"
-        event.next_retry_at = (
+        delivery.status = "circuit_open" # ← Tracked on delivery record
+        delivery.next_retry_at = (
                 datetime.now(timezone.utc)
                 + timedelta(seconds=delay)
         )
@@ -359,10 +374,10 @@ class WebhookEngine:
         from worker.tasks import deliver_webhook
 
         # Determine target queue based on retry count
-        target_queue = "default" if event.retry_count <= 2 else "low_priority"
+        target_queue = "default" if delivery.retry_count <= 2 else "low_priority"
 
         deliver_webhook.apply_async(
-            args=[event.id, endpoint_url, subscription_id],
+            args=[delivery.id], # ← Pass delivery.id
             countdown=delay,
             queue=target_queue
         )
@@ -374,26 +389,25 @@ class WebhookEngine:
     @staticmethod
     def handle_failure(
             db,
-            event,
+            delivery,
             failure_type,
             error_message,
-            endpoint_url=None,
-            subscription_id=None
+            target_url
     ):
+        from app.models.event import Event
+        event = db.get(Event, delivery.event_id)
 
         # -----------------------------
-        # UPDATE EVENT FAILURE STATE
+        # UPDATE DELIVERY FAILURE STATE
         # -----------------------------
 
-        event.retry_count += 1
-        event.failure_type = failure_type.value
-        event.last_error = error_message
+        delivery.retry_count += 1 # ← Tracked on delivery record
+        delivery.failure_type = failure_type.value
+        delivery.last_error = error_message
 
         retryable = FailureClassifier.is_retryable(
             failure_type
         )
-
-        event.retryable = retryable
 
         max_retries = RetryPolicy.max_retries(
             failure_type
@@ -405,14 +419,15 @@ class WebhookEngine:
 
         if (
                 not retryable
-                or event.retry_count > max_retries
+                or delivery.retry_count > max_retries
         ):
-            event.status = "dead"
-            event.next_retry_at = None
+            delivery.status = "dead" # ← Tracked on delivery record
+            delivery.next_retry_at = None
 
             DLQService.move_to_dlq(
                 db=db,
                 event_id=event.id,
+                subscription_delivery_id=delivery.id, # ← Pass subscription_delivery_id
                 failure_type=failure_type.value,
                 final_error=error_message
             )
@@ -439,7 +454,7 @@ class WebhookEngine:
 
         delay = RetryPolicy.get_delay(
             failure_type,
-            event.retry_count
+            delivery.retry_count # ← Tracked on delivery record
         )
 
         retry_time = (
@@ -447,8 +462,8 @@ class WebhookEngine:
                 + timedelta(seconds=delay)
         )
 
-        event.status = "retrying"
-        event.next_retry_at = retry_time
+        delivery.status = "retrying" # ← Tracked on delivery record
+        delivery.next_retry_at = retry_time
 
         # Increment tenant retries counter
         tenant = db.get(Tenant, event.tenant_id)
@@ -466,7 +481,7 @@ class WebhookEngine:
         from app.core.metrics import WEBHOOK_RETRIES_TOTAL
         WEBHOOK_RETRIES_TOTAL.labels(
             tenant_id=str(event.tenant_id),
-            retry_count=str(event.retry_count)
+            retry_count=str(delivery.retry_count) # ← Tracked on delivery record
         ).inc()
 
         # -----------------------------
@@ -484,11 +499,6 @@ class WebhookEngine:
             CircuitBreakerService
         )
 
-        target_url = endpoint_url
-        if not target_url:
-            tenant = db.get(Tenant, event.tenant_id)
-            target_url = tenant.webhook_url if tenant else None
-
         if target_url:
 
             circuit = CircuitBreakerService.get_or_create(
@@ -500,8 +510,8 @@ class WebhookEngine:
             if circuit.state == "open":
                 delay = circuit.cooldown_seconds
 
-                event.status = "circuit_open"
-                event.next_retry_at = (
+                delivery.status = "circuit_open" # ← Tracked on delivery record
+                delivery.next_retry_at = (
                         datetime.now(timezone.utc)
                         + timedelta(seconds=delay)
                 )
@@ -513,14 +523,14 @@ class WebhookEngine:
                 )
 
         # Determine target queue based on retry count
-        target_queue = "default" if event.retry_count <= 2 else "low_priority"
+        target_queue = "default" if delivery.retry_count <= 2 else "low_priority"
 
         # -----------------------------
         # SCHEDULE RETRY
         # -----------------------------
 
         deliver_webhook.apply_async(
-            args=[event.id, endpoint_url, subscription_id],
+            args=[delivery.id], # ← Pass delivery.id
             countdown=delay,
             queue=target_queue
         )

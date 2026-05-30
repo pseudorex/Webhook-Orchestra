@@ -7,12 +7,14 @@ class DLQService:
     def move_to_dlq(
         db,
         event_id,
+        subscription_delivery_id,
         failure_type,
         final_error
     ):
 
         dead_event = DeadLetterEvent(
             original_event_id=event_id,
+            subscription_delivery_id=subscription_delivery_id,
             failure_type=failure_type,
             final_error=final_error
         )
