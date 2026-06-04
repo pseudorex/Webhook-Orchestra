@@ -183,7 +183,7 @@
       }
     },
     {
-      "title": "Failures - DLQ Moves (Last 5m)",
+      "title": "Failures - DLQ Moves (Total)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -192,7 +192,7 @@
       "gridPos": { "h": 6, "w": 6, "x": 12, "y": 5 },
       "targets": [
         {
-          "expr": "sum(increase(webhook_dlq_moves_total{tenant_id=~\"$tenant_id\"}[5m]))",
+          "expr": "sum(increase(webhook_dlq_moves_total{tenant_id=~\"$tenant_id\"}[$__range]))",
           "refId": "A"
         }
       ],
@@ -409,7 +409,7 @@
     ]
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-30m",
     "to": "now"
   },
   "timepicker": {},
