@@ -19,6 +19,8 @@
 - [Load Test Results](#load-test-results)
 - [Observability](#observability)
 - [Project Structure](#project-structure)
+- [Engineering Fixes](#engineering-fixes)
+- [Running Tests](#running-tests)
 
 ---
 
@@ -826,3 +828,257 @@ Response Header: X-Correlation-ID: "abc-123"
 ---
 
 *Built with FastAPI, Celery, RabbitMQ, and PostgreSQL*
+
+---
+
+## Engineering Fixes
+
+This section documents three concrete engineering gaps that were identified through code review and resolved with targeted fixes. Each fix is traceable to a specific file and design decision.
+
+---
+
+### Fix 1 — HTTP Client: `requests` replaced with `httpx`
+
+**Problem**
+
+The codebase used the `requests` library for all outbound HTTP calls — webhook delivery in `webhook_engine.py`, RabbitMQ queue polling in `routing_engine.py` and `metrics.py`. While `requests` is correct and stable, it has two limitations relevant to this project:
+
+1. It has no async support. If the worker pool is ever upgraded from `--pool=threads` to `--pool=gevent` (for higher concurrency), `requests` would need to be replaced entirely.
+2. The OpenTelemetry instrumentation package `opentelemetry-instrumentation-requests` is slowly being superseded by the `httpx` equivalent.
+
+**Fix**
+
+Replaced `requests` with `httpx` across all four affected locations. The synchronous API is identical — `requests.post()` becomes `httpx.post()`, `requests.get()` becomes `httpx.get()` — so zero business logic changed. Only the import and library call site changed.
+
+```python
+# Before
+import requests
+response = requests.post(target_url, json=payload, headers=headers, timeout=10)
+
+# After
+import httpx
+response = httpx.post(target_url, json=payload, headers=headers, timeout=10)
+```
+
+The OpenTelemetry tracing setup in `app/core/tracing.py` was updated in parallel:
+
+```python
+# Before — instruments a library no longer being called
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+RequestsInstrumentor().instrument()
+
+# After — instruments the library actually making HTTP calls
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+HTTPXClientInstrumentor().instrument()
+```
+
+Without this, Jaeger traces would silently lose the outbound webhook delivery spans.
+
+`requirements.txt` was updated to reflect the change: `requests` removed, `httpx==0.28.1` added.
+
+**Files changed:** `webhook_engine.py`, `routing_engine.py`, `metrics.py`, `tracing.py`, `requirements.txt`
+
+**Upgrade path:** When moving to async workers, `httpx.post()` becomes `await client.post()` — same library, no second migration needed.
+
+---
+
+### Fix 2 — Circuit Breaker Race Condition: `SELECT FOR UPDATE`
+
+**Problem**
+
+The circuit breaker stores its failure counter in PostgreSQL. The original `record_failure()` logic followed a classic read-modify-write pattern:
+
+```python
+# Both Worker A and Worker B execute this simultaneously:
+circuit = db.query(CircuitBreaker).filter_by(endpoint_url=url).first()
+# Both read failure_count = 4, threshold = 5
+
+circuit.failure_count += 1
+# Both compute 5
+
+db.commit()
+# Both write 5 — the count should be 6, circuit opens one request late
+```
+
+Under high concurrency (32 threads hitting the same failing endpoint), two workers can read the same `failure_count`, both increment it, and both write back the same value. The circuit breaker opens later than the configured threshold.
+
+**Fix**
+
+Added `with_for_update()` to both `record_failure()` and `record_success()`. This issues a `SELECT ... FOR UPDATE` in PostgreSQL, which acquires a row-level lock on the circuit breaker row for the duration of the transaction. Any other worker trying to read the same row will wait until the first worker commits.
+
+```python
+# Before — no lock, race condition possible
+circuit = (
+    db.query(CircuitBreaker)
+    .filter(CircuitBreaker.endpoint_url == endpoint_url)
+    .first()
+)
+
+# After — row locked until db.commit()
+circuit = (
+    db.query(CircuitBreaker)
+    .filter(CircuitBreaker.endpoint_url == endpoint_url)
+    .with_for_update()
+    .first()
+)
+```
+
+The `get_or_create()` helper is intentionally NOT locked — its job is a safe upsert on first-time creation, not a counter update, so locking there is unnecessary overhead.
+
+**Files changed:** `circuit_breaker_service.py`
+
+**Impact before fix:** Circuit could open 1–2 requests later than threshold under extreme concurrency. No data corruption, but a real correctness gap.
+
+**Impact after fix:** Threshold is exact. Under load, workers queue behind each other for the row lock — each one reads the latest committed value and increments correctly.
+
+---
+
+### Fix 3 — Circular Import and Metric Import Hygiene
+
+**Problem A — Circular Import**
+
+The codebase had a circular dependency between `webhook_engine.py` and `worker/tasks.py`:
+
+```
+worker/tasks.py
+  └── imports WebhookEngine from app.services.reliability.webhook_engine
+        └── would import deliver_webhook from worker.tasks  <-- circular
+```
+
+This was worked around by placing `from worker.tasks import deliver_webhook` inside the function body (`handle_failure()` and `handle_circuit_open()`), deferring the import to runtime. It works, but is invisible to static analysis tools and misleads any reader of the file.
+
+**Fix A**
+
+Replaced the direct function import with `celery.send_task()`, which references the task by name string instead of importing it:
+
+```python
+# Before — local import inside function (circular import workaround)
+def handle_failure(...):
+    from worker.tasks import deliver_webhook          # deferred to avoid circular
+    deliver_webhook.apply_async(
+        args=[delivery.id], countdown=delay, queue=target_queue
+    )
+
+# After — no import needed, Celery resolves the task name at runtime
+def handle_failure(...):
+    from worker.celery_app import celery              # no circular dependency
+    celery.send_task(
+        "worker.tasks.deliver_webhook",
+        args=[delivery.id], countdown=delay, queue=target_queue
+    )
+```
+
+The `worker.celery_app` module does not import from `app.services`, so there is no circular dependency in this direction.
+
+**Problem B — Metric Imports Inside Function Bodies**
+
+All Prometheus metric objects were imported inside individual function calls:
+
+```python
+def process_event(...):
+    # ... 50 lines later ...
+    from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL  # inside function
+    WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(...).inc()
+```
+
+This pattern was used as a blanket workaround because the circular import above made any top-level import from `app.core` feel risky. In reality, `app.core.metrics` has no dependency on `app.services`, so there was never a circular import risk for the metrics specifically.
+
+**Fix B**
+
+All four metric objects are now imported once at the top of `webhook_engine.py`:
+
+```python
+# At the top of webhook_engine.py — clean, explicit, no circular risk
+from app.core.metrics import (
+    WEBHOOK_DELIVERY_ATTEMPTS_TOTAL,
+    WEBHOOK_DELIVERY_LATENCIES_SECONDS,
+    WEBHOOK_RETRIES_TOTAL,
+    WEBHOOK_DLQ_MOVES_TOTAL,
+)
+```
+
+This makes all dependencies of the module visible at a glance, eliminates repeated `sys.modules` lookups on every function call, and follows standard Python import conventions.
+
+**Files changed:** `webhook_engine.py`
+
+---
+
+## Running Tests
+
+The test suite uses `pytest` with an in-memory SQLite database. No PostgreSQL, RabbitMQ, Redis, or Docker is required — all external services are mocked. The suite runs in approximately 1–2 seconds.
+
+### Prerequisites
+
+Ensure the virtual environment is active and dependencies are installed:
+
+```bash
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Run all tests
+
+```bash
+pytest
+```
+
+`pytest.ini` is configured to discover tests in the `test/` directory automatically — no arguments needed.
+
+### Run a specific file
+
+```bash
+pytest test/test_circuit_breaker.py
+pytest test/test_failure_classifier.py
+pytest test/test_retry_policy.py
+pytest test/test_signature_service.py
+pytest test/test_webhook_engine.py
+```
+
+### Run a specific test class or case
+
+```bash
+# Run all state machine tests
+pytest test/test_circuit_breaker.py::TestStateMachineSequence
+
+# Run a single test
+pytest test/test_circuit_breaker.py::TestStateMachineSequence::test_full_lifecycle
+
+# Run tests matching a keyword
+pytest -k "dlq"
+pytest -k "timeout or rate_limited"
+```
+
+### Useful flags
+
+```bash
+pytest -v          # verbose — shows each test name
+pytest -s          # show print/log output
+pytest -x          # stop on first failure
+pytest --tb=short  # shorter tracebacks
+```
+
+### Test coverage overview
+
+| Test File | What It Covers | Tests |
+|---|---|---|
+| `test_failure_classifier.py` | HTTP status code classification, exception type mapping, `is_retryable()` flag, enum integrity | 22 |
+| `test_retry_policy.py` | Max retries per failure type, backoff formulas (linear, exponential, rate-limit), dispatch correctness | 24 |
+| `test_signature_service.py` | HMAC-SHA256 correctness, key-order invariance, secret sensitivity, receiver verification pattern | 12 |
+| `test_circuit_breaker.py` | `get_or_create`, all state transitions (closed/open/half-open), `record_success/failure`, health score formula, full lifecycle | 26 |
+| `test_webhook_engine.py` | Success delivery, permanent failure to DLQ, transient retry, rate-limit backoff, queue routing, max retry promotion, exception handling, idempotency | 23 |
+| **Total** | | **107** |
+
+### Expected output
+
+```
+============================= test session starts ==============================
+collected 107 items
+
+test/test_circuit_breaker.py   ..........................   [ 24%]
+test/test_failure_classifier.py   ......................   [ 46%]
+test/test_retry_policy.py   ........................      [ 68%]
+test/test_signature_service.py   ..........               [ 78%]
+test/test_webhook_engine.py   .......................      [100%]
+
+============================== 107 passed in 1.30s ============================
+```
