@@ -8,10 +8,7 @@ logger = logging.getLogger(__name__)
 
 class CircuitBreakerService:
 
-    # ================================
     # GET OR CREATE CIRCUIT
-    # ================================
-
     @staticmethod
     def get_or_create(db, endpoint_url, tenant_id):
 
@@ -37,10 +34,8 @@ class CircuitBreakerService:
 
         return circuit
 
-    # ================================
-    # CHECK IF REQUEST IS ALLOWED
-    # ================================
 
+    # CHECK IF REQUEST IS ALLOWED
     @staticmethod
     def should_allow_request(db, endpoint_url, tenant_id):
 
@@ -50,24 +45,24 @@ class CircuitBreakerService:
             tenant_id=tenant_id,
         )
 
-        # ----------------------------
         # CLOSED → allow all
-        # ----------------------------
-
         if circuit.state == "closed":
             return True
 
-        # ----------------------------
         # OPEN → check cooldown
-        # ----------------------------
-
         if circuit.state == "open":
 
             if circuit.opened_at is None:
                 return False
 
+            # Normalise to UTC-aware so the subtraction works whether
+            # the DB returned a naive or tz-aware datetime (SQLite returns naive).
+            opened_at = circuit.opened_at
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+
             elapsed = (
-                    datetime.now(timezone.utc) - circuit.opened_at
+                    datetime.now(timezone.utc) - opened_at
             )
 
             cooldown = timedelta(
@@ -94,19 +89,13 @@ class CircuitBreakerService:
 
             return False
 
-        # ----------------------------
         # HALF_OPEN → allow one test
-        # ----------------------------
-
         if circuit.state == "half_open":
             return True
 
         return False
 
-    # ================================
-    # CALCULATE HEALTH (Phase 5.3)
-    # ================================
-
+    # CALCULATE HEALTH
     @staticmethod
     def calculate_health(circuit):
         if circuit.state == "open":
@@ -142,21 +131,24 @@ class CircuitBreakerService:
         else:
             circuit.health_state = "unhealthy"
 
-    # ================================
     # RECORD SUCCESS
-    # ================================
-
     @staticmethod
     def record_success(db, endpoint_url, tenant_id, latency_ms=None):
-        circuit = CircuitBreakerService.get_or_create(
-            db=db,
-            endpoint_url=endpoint_url,
-            tenant_id=tenant_id,
+        # SELECT FOR UPDATE: lock this row for the duration of the transaction
+        # so concurrent workers cannot produce a lost-update race on the counters.
+        circuit = (
+            db.query(CircuitBreaker)
+            .filter(CircuitBreaker.endpoint_url == endpoint_url)
+            .with_for_update()
+            .first()
         )
+        if circuit is None:
+            # Row does not exist yet — create it (no lock needed on a fresh row)
+            circuit = CircuitBreakerService.get_or_create(
+                db=db, endpoint_url=endpoint_url, tenant_id=tenant_id
+            )
 
         previous_state = circuit.state
-
-        # Update metrics
         circuit.state = "closed"
         circuit.failure_count = 0
         circuit.consecutive_failures = 0
@@ -187,17 +179,23 @@ class CircuitBreakerService:
                 extra={"endpoint_url": endpoint_url, "previous_state": previous_state}
             )
 
-    # ================================
     # RECORD FAILURE
-    # ================================
-
     @staticmethod
     def record_failure(db, endpoint_url, tenant_id, latency_ms=None):
-        circuit = CircuitBreakerService.get_or_create(
-            db=db,
-            endpoint_url=endpoint_url,
-            tenant_id=tenant_id,
+        # SELECT FOR UPDATE: lock this row for the duration of the transaction.
+        # Without this, two concurrent workers both reading failure_count=4
+        # would both write back 5 instead of one writing 5 and one writing 6,
+        # causing the circuit to open one request later than the threshold.
+        circuit = (
+            db.query(CircuitBreaker)
+            .filter(CircuitBreaker.endpoint_url == endpoint_url)
+            .with_for_update()
+            .first()
         )
+        if circuit is None:
+            circuit = CircuitBreakerService.get_or_create(
+                db=db, endpoint_url=endpoint_url, tenant_id=tenant_id
+            )
 
         # Concurrency check
         if circuit.state == "open":

@@ -1,10 +1,10 @@
-# 🎻 Webhook Orchestra
+# Webhook Orchestra
 
 > **A production-grade, distributed Webhook Delivery Engine** built with FastAPI, Celery, RabbitMQ, and PostgreSQL. Designed for high-throughput, fault-tolerant, multi-tenant webhook delivery with intelligent retry logic, circuit breaking, real-time observability, and dead-letter queue recovery.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Key Features](#key-features)
@@ -38,25 +38,25 @@ The system is built around three core principles:
 
 ## Key Features
 
-### 1. 🏢 Multi-Tenant Architecture
+### 1. Multi-Tenant Architecture
 - Each tenant gets a unique **API key** and **webhook signing secret** on registration
 - All data (events, subscriptions, deliveries) is **tenant-scoped** — complete isolation
 - Tenants cannot access or replay each other's events
 - Idempotency keys prevent duplicate event processing per tenant
 
-### 2. 📡 Topic-Based Fan-Out
+### 2. Topic-Based Fan-Out
 - Events are published to a **topic** (e.g., `payment.created`, `order.shipped`)
 - All active subscriptions matching that topic receive the event
 - A single event fans out to **multiple endpoints concurrently** via Celery tasks
 - Each fan-out creates an independent `SubscriptionDelivery` record for tracking
 
-### 3. 🔐 Cryptographic Payload Signing
+### 3. Cryptographic Payload Signing
 - Every webhook payload is signed with **HMAC-SHA256** using the tenant's secret
 - The signature is sent in the `X-Webhook-Signature` header
 - Receivers can verify authenticity by recomputing the signature
 - JSON payload is serialized with **sorted keys** to ensure consistent signatures
 
-### 4. 🔁 Intelligent Retry System
+### 4. Intelligent Retry System
 Failures are classified and retried with strategies specific to the failure type:
 
 | Failure Type | HTTP Codes | Retry Strategy | Max Retries |
@@ -68,7 +68,7 @@ Failures are classified and retried with strategies specific to the failure type
 | `DNS_ERROR` | DNS failure | Linear backoff (5s × attempt) | 5 |
 | `CONNECTION_REFUSED` | Connection refused | Exponential backoff | 5 |
 
-### 5. ⚡ Circuit Breaker
+### 5. Circuit Breaker
 Three-state machine that automatically protects against cascading failures:
 
 ```
@@ -85,19 +85,19 @@ CLOSED ─────────────► OPEN ────────�
 - **HALF_OPEN** → One test request allowed to probe recovery
 - Health score (0–100) computed from success rate, latency, and failure streaks
 
-### 6. 📬 Dead Letter Queue (DLQ)
+### 6. Dead Letter Queue (DLQ)
 - Events that exhaust all retries or are permanently rejected are moved to the DLQ
 - Full failure context stored: `failure_type`, `final_error`, `retry_count`
 - Manual replay via API: resets retry count and re-queues to `low_priority`
 - DLQ is tenant-scoped — each tenant can only see and replay their own dead events
 
-### 7. 🎚️ Adaptive Queue Routing
+### 7. Adaptive Queue Routing
 - Monitors RabbitMQ `high_priority` queue length via the RabbitMQ HTTP Management API
 - If backlog exceeds **2000 tasks**, new events are demoted to `default` queue
 - Prevents priority starvation during traffic spikes
 - Configurable congestion threshold via environment variable
 
-### 8. 📊 Full Observability Stack
+### 8. Full Observability Stack
 - **Prometheus** metrics: delivery attempts, latency histograms, retry counts, DLQ size, queue lengths, worker task duration
 - **Grafana** dashboard: real-time panels for throughput, latency percentiles, health scores, and failure breakdowns
 - **Jaeger** (OpenTelemetry): distributed traces across FastAPI → Celery → HTTP delivery
@@ -217,7 +217,7 @@ POST /events/  { event_type, payload, idempotency_key }
                    │           → if messages > 2000: use "default"
                    │           → else: use "high_priority"
                    └── deliver_webhook.apply_async(args=[delivery.id])
-                         └── Message published to RabbitMQ ✓
+                         └── Message published to RabbitMQ
 
 Response to client: 200 OK { id, event_type, status: "received" }
 (delivery happens asynchronously)
@@ -825,4 +825,4 @@ Response Header: X-Correlation-ID: "abc-123"
 
 ---
 
-*Built with ❤️ using FastAPI, Celery, RabbitMQ, and PostgreSQL*
+*Built with FastAPI, Celery, RabbitMQ, and PostgreSQL*

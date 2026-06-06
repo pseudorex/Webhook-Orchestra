@@ -6,7 +6,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
 
 def setup_tracing(service_name: str):
@@ -26,8 +26,8 @@ def setup_tracing(service_name: str):
 
     trace.set_tracer_provider(provider)
 
-    # Instrument requests outbound calls automatically
-    RequestsInstrumentor().instrument()
+    # Instrument httpx outbound calls automatically
+    HTTPXClientInstrumentor().instrument()
 
 
 def instrument_app(app):

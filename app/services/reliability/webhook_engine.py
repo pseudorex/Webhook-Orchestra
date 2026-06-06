@@ -1,4 +1,4 @@
-import requests
+import httpx
 import time
 import logging
 
@@ -35,6 +35,18 @@ from app.services.reliability.circuit_breaker_service import (
 )
 from app.core.logging import correlation_id_var, tenant_id_var, event_id_var
 
+# ---------------------------------------------------------------------------
+# Prometheus metrics — imported once at module level (not inside functions).
+# app.core.metrics has no dependency on app.services so there is no circular
+# import here. The previous local imports were an unnecessary workaround.
+# ---------------------------------------------------------------------------
+from app.core.metrics import (
+    WEBHOOK_DELIVERY_ATTEMPTS_TOTAL,
+    WEBHOOK_DELIVERY_LATENCIES_SECONDS,
+    WEBHOOK_RETRIES_TOTAL,
+    WEBHOOK_DLQ_MOVES_TOTAL,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,9 +69,7 @@ class WebhookEngine:
             tenant_id_var.set(event.tenant_id)
             event_id_var.set(event.id)
 
-            # -----------------------------
             # FETCH TENANT
-            # -----------------------------
 
             tenant = db.get(
                 Tenant,
@@ -72,9 +82,7 @@ class WebhookEngine:
             # Increment tenant delivery attempts counter
             tenant.delivery_attempts_count += 1
 
-            # -----------------------------
             # RESOLVE TARGET URL
-            # -----------------------------
 
             target_url = None
             if delivery.subscription_id:
@@ -87,10 +95,7 @@ class WebhookEngine:
             if not target_url:
                 raise Exception("NO ENDPOINT URL AVAILABLE")
 
-            # =============================
             # CIRCUIT BREAKER CHECK
-            # =============================
-
             allowed = CircuitBreakerService.should_allow_request(
                 db=db,
                 endpoint_url=target_url,
@@ -145,7 +150,7 @@ class WebhookEngine:
             if corr_id:
                 headers["X-Correlation-ID"] = corr_id
 
-            response = requests.post(
+            response = httpx.post(
                 target_url,
                 json=payload,
                 headers=headers,
@@ -209,8 +214,7 @@ class WebhookEngine:
                     extra={"status_code": response.status_code, "endpoint_url": target_url}
                 )
 
-                # prometheus: record delivery success metrics
-                from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
+                # Prometheus: record delivery success metrics
                 latency_sec = latency / 1000.0
                 WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                     tenant_id=str(event.tenant_id),
@@ -237,8 +241,7 @@ class WebhookEngine:
                 latency_ms=latency,
             )
 
-            # prometheus: record failed delivery status code metric
-            from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
+            # Prometheus: record failed delivery status code metric
             latency_sec = latency / 1000.0
             WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                 tenant_id=str(event.tenant_id),
@@ -302,9 +305,8 @@ class WebhookEngine:
                     latency_ms=latency,
                 )
 
-            # prometheus: record execution exception metric
+            # Prometheus: record execution exception metric
             if event:
-                from app.core.metrics import WEBHOOK_DELIVERY_ATTEMPTS_TOTAL, WEBHOOK_DELIVERY_LATENCIES_SECONDS
                 latency_sec = latency / 1000.0
                 WEBHOOK_DELIVERY_ATTEMPTS_TOTAL.labels(
                     tenant_id=str(event.tenant_id),
@@ -364,20 +366,22 @@ class WebhookEngine:
             extra={"delay_seconds": delay}
         )
 
-        # prometheus: track circuit open retry schedule
-        from app.core.metrics import WEBHOOK_RETRIES_TOTAL
+        # Prometheus: track circuit open retry schedule
         WEBHOOK_RETRIES_TOTAL.labels(
             tenant_id=str(event.tenant_id),
             retry_count="circuit_cooldown"
         ).inc()
 
-        from worker.tasks import deliver_webhook
+        # Use celery.send_task() to schedule the retry.
+        # This avoids a circular import: webhook_engine <- worker.tasks <- webhook_engine.
+        from worker.celery_app import celery
 
         # Determine target queue based on retry count
         target_queue = "default" if delivery.retry_count <= 2 else "low_priority"
 
-        deliver_webhook.apply_async(
-            args=[delivery.id], # ← Pass delivery.id
+        celery.send_task(
+            "worker.tasks.deliver_webhook",
+            args=[delivery.id],
             countdown=delay,
             queue=target_queue
         )
@@ -439,8 +443,7 @@ class WebhookEngine:
                 extra={"failure_type": failure_type.value, "error": error_message}
             )
 
-            # prometheus: track DLQ move metric
-            from app.core.metrics import WEBHOOK_DLQ_MOVES_TOTAL
+            # Prometheus: track DLQ move metric
             WEBHOOK_DLQ_MOVES_TOTAL.labels(
                 tenant_id=str(event.tenant_id),
                 failure_type=failure_type.value
@@ -477,19 +480,18 @@ class WebhookEngine:
             extra={"delay_seconds": delay, "failure_type": failure_type.value, "next_retry_at": retry_time.isoformat()}
         )
 
-        # prometheus: track standard backoff retry schedule
-        from app.core.metrics import WEBHOOK_RETRIES_TOTAL
+        # Prometheus: track standard backoff retry schedule
         WEBHOOK_RETRIES_TOTAL.labels(
             tenant_id=str(event.tenant_id),
-            retry_count=str(delivery.retry_count) # ← Tracked on delivery record
+            retry_count=str(delivery.retry_count)
         ).inc()
 
-        # -----------------------------
-        # IMPORT INSIDE FUNCTION
-        # AVOID CIRCULAR IMPORT
-        # -----------------------------
-
-        from worker.tasks import deliver_webhook
+        # ---------------------------------------------------------------------------
+        # Break the circular import: webhook_engine <- worker.tasks <- webhook_engine
+        # by using celery.send_task() with the task name string instead of importing
+        # the deliver_webhook function directly.
+        # ---------------------------------------------------------------------------
+        from worker.celery_app import celery
 
         # -----------------------------
         # CHECK CIRCUIT BEFORE RETRY
@@ -529,8 +531,9 @@ class WebhookEngine:
         # SCHEDULE RETRY
         # -----------------------------
 
-        deliver_webhook.apply_async(
-            args=[delivery.id], # ← Pass delivery.id
+        celery.send_task(
+            "worker.tasks.deliver_webhook",
+            args=[delivery.id],
             countdown=delay,
             queue=target_queue
         )

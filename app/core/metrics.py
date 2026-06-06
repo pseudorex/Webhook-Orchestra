@@ -1,6 +1,6 @@
 from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
 import os
-import requests
+import httpx
 
 # Create custom registry to prevent mix-ups with python system metrics
 REGISTRY = CollectorRegistry()
@@ -84,7 +84,7 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 def get_rabbitmq_queue_length(queue_name: str) -> int:
     """Queries RabbitMQ HTTP Management API to fetch queue message count."""
     try:
-        response = requests.get(
+        response = httpx.get(
             f"{RABBITMQ_API_URL}/{queue_name}",
             auth=(RABBITMQ_USER, RABBITMQ_PASSWORD),
             timeout=1
